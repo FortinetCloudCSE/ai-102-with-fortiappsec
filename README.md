@@ -5,6 +5,8 @@ To view the workshop, please go here: [GitHub Pages Link](https://fortinetcloudc
 
 Based on Alex Jammes' work found [here](https://github.com/40docs/tutorial_mcp) and included in the tutorial_mcp folder.
 
+Live demo can be accessed after check-in [here](https://fortinetcloudcse.github.io/ai-102-with-fortiappsec/05mcpdemo/index.html)
+
 ---
 
 For more information on creating these workshops, visit [FortinetCloudCSE User Repo](https://fortinetcloudcse.github.io/UserRepo/)
