@@ -1,0 +1,4404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP Glass Box Demo</title>
+  <!-- React 18 from CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel standalone for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #0f0f1a;
+      color: #e2e8f0;
+      overflow: hidden;
+      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    #root { height: 100vh; }
+
+    /* Scrollbar styling */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3a3a5a; }
+
+    /* Animations */
+    @keyframes typingBounce {
+      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+      30% { transform: translateY(-6px); opacity: 1; }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+// ============================================================================
+// MCP Glass Box Demo — Single-File Application
+// ============================================================================
+// Built from source components. All code runs in-browser via Babel standalone.
+// ============================================================================
+
+const { useState, useCallback, useEffect, useRef, useMemo, createContext, useContext } = React;
+
+
+// ============================================================================
+// SECTION 1-5: SIMULATION ENGINE (Constants, Data, Steps, Hook)
+// ============================================================================
+
+// ============================================================================
+// MCP Glass Box Demo — Simulation Engine
+// ============================================================================
+// Single source of truth for the entire MCP demo. All UI components consume
+// state from the useSimulation hook exported at the bottom of this file.
+// ============================================================================
+
+// ============================================================================
+// 1. SHARED CONSTANTS
+// ============================================================================
+
+const COLORS = {
+  host:      { bg: '#92400e', border: '#f59e0b', text: '#fbbf24', glow: 'rgba(245,158,11,0.4)' },
+  client:    { bg: '#065f46', border: '#10b981', text: '#34d399', glow: 'rgba(16,185,129,0.4)' },
+  server:    { bg: '#1e3a5f', border: '#3b82f6', text: '#60a5fa', glow: 'rgba(59,130,246,0.4)' },
+  api:       { bg: '#581c87', border: '#a855f7', text: '#c084fc', glow: 'rgba(168,85,247,0.4)' },
+  transport: { bg: '#374151', border: '#6b7280', text: '#9ca3af' },
+};
+
+const COMPONENT_IDS = {
+  HOST:          'host',
+  MODEL:         'model',
+  CLIENT_1:      'client-files',
+  CLIENT_2:      'client-utils',
+  SERVER_FILES:  'server-files',
+  SERVER_UTILS:  'server-utils',
+  API:           'anthropic-api',
+  TRANSPORT_1:   'transport-1',
+  TRANSPORT_2:   'transport-2',
+};
+
+const C = COMPONENT_IDS; // shorthand for step definitions
+
+// ============================================================================
+// 2. SIMULATED MCP CONFIGURATION
+// ============================================================================
+
+const MCP_CONFIG = {
+  mcpServers: {
+    "file-system": {
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/documents"],
+      transport: "stdio"
+    },
+    "utilities": {
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-utilities"],
+      transport: "stdio"
+    }
+  }
+};
+
+// ============================================================================
+// 3. SIMULATED FILE SYSTEM
+// ============================================================================
+
+const SIMULATED_FS = {
+  'notes.txt': 'Meeting notes from Monday: Discuss Q3 roadmap, review hiring pipeline, finalize budget.',
+  'todo.txt':  '1. Ship MCP demo\n2. Review architecture doc\n3. Schedule team sync',
+  'config.json': JSON.stringify(MCP_CONFIG, null, 2),
+};
+
+// ============================================================================
+// 4. SERVER & TOOL DEFINITIONS (with real JSON Schema)
+// ============================================================================
+
+const SERVER_DEFINITIONS = {
+  'server-files': {
+    name: 'File System',
+    id: 'server-files',
+    command: MCP_CONFIG.mcpServers['file-system'].command,
+    args: MCP_CONFIG.mcpServers['file-system'].args,
+    transport: 'stdio',
+    capabilities: { tools: {} },
+    protocolVersion: '2024-11-05',
+    serverInfo: { name: 'filesystem-server', version: '1.0.0' },
+    tools: [
+      {
+        name: 'read_file',
+        description: 'Read the contents of a file from the file system',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Path to the file to read' }
+          },
+          required: ['path']
+        }
+      },
+      {
+        name: 'write_file',
+        description: 'Write content to a file on the file system',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path:    { type: 'string', description: 'Path to the file to write' },
+            content: { type: 'string', description: 'Content to write to the file' }
+          },
+          required: ['path', 'content']
+        }
+      },
+      {
+        name: 'list_files',
+        description: 'List files in a directory',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            directory: { type: 'string', description: 'Directory path to list', default: '.' }
+          }
+        }
+      }
+    ]
+  },
+  'server-utils': {
+    name: 'Utilities',
+    id: 'server-utils',
+    command: MCP_CONFIG.mcpServers['utilities'].command,
+    args: MCP_CONFIG.mcpServers['utilities'].args,
+    transport: 'stdio',
+    capabilities: { tools: {} },
+    protocolVersion: '2024-11-05',
+    serverInfo: { name: 'utilities-server', version: '1.0.0' },
+    tools: [
+      {
+        name: 'get_current_time',
+        description: 'Get the current date and time',
+        inputSchema: {
+          type: 'object',
+          properties: {}
+        }
+      },
+      {
+        name: 'count_words',
+        description: 'Count the number of words in the provided text',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Text to count words in' }
+          },
+          required: ['text']
+        }
+      },
+      {
+        name: 'calculate',
+        description: 'Evaluate a mathematical expression',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            expression: { type: 'string', description: 'Mathematical expression to evaluate (e.g. "2 + 3 * 4")' }
+          },
+          required: ['expression']
+        }
+      }
+    ]
+  }
+};
+
+// Tool → server ownership map (built from definitions)
+const TOOL_OWNERSHIP = {};
+Object.entries(SERVER_DEFINITIONS).forEach(([serverId, server]) => {
+  server.tools.forEach(tool => {
+    TOOL_OWNERSHIP[tool.name] = { serverId, serverName: server.name };
+  });
+});
+
+// Anthropic API tool format (derived from server definitions)
+const API_TOOL_DEFINITIONS = Object.values(SERVER_DEFINITIONS).flatMap(server =>
+  server.tools.map(tool => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.inputSchema,
+  }))
+);
+
+// ============================================================================
+// 5. JSON-RPC MESSAGE BUILDERS
+// ============================================================================
+
+let jsonRpcIdCounter = 0;
+const resetJsonRpcId = () => { jsonRpcIdCounter = 0; };
+
+const jsonRpcRequest = (method, params, id) => ({
+  jsonrpc: '2.0',
+  method,
+  params,
+  id: id ?? ++jsonRpcIdCounter,
+});
+
+const jsonRpcResponse = (result, id) => ({
+  jsonrpc: '2.0',
+  result,
+  id,
+});
+
+const jsonRpcNotification = (method, params) => ({
+  jsonrpc: '2.0',
+  method,
+  ...(params ? { params } : {}),
+});
+
+// ============================================================================
+// 6. PRE-BUILT JSON-RPC MESSAGES (spec-accurate MCP protocol)
+// ============================================================================
+
+const JSONRPC = {
+  // --- Client 1 (Files) initialization ---
+  initializeRequest1: jsonRpcRequest('initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: { roots: { listChanged: true }, sampling: {} },
+    clientInfo: { name: 'claude-desktop', version: '1.4.0' }
+  }, 1),
+
+  initializeResponse1: jsonRpcResponse({
+    protocolVersion: '2024-11-05',
+    capabilities: { tools: { listChanged: true } },
+    serverInfo: { name: 'filesystem-server', version: '1.0.0' }
+  }, 1),
+
+  initializedNotification1: jsonRpcNotification('notifications/initialized'),
+
+  toolsListRequest1: jsonRpcRequest('tools/list', {}, 2),
+
+  toolsListResponse1: jsonRpcResponse({
+    tools: SERVER_DEFINITIONS['server-files'].tools
+  }, 2),
+
+  // --- Client 2 (Utilities) initialization ---
+  initializeRequest2: jsonRpcRequest('initialize', {
+    protocolVersion: '2024-11-05',
+    capabilities: { roots: { listChanged: true }, sampling: {} },
+    clientInfo: { name: 'claude-desktop', version: '1.4.0' }
+  }, 3),
+
+  initializeResponse2: jsonRpcResponse({
+    protocolVersion: '2024-11-05',
+    capabilities: { tools: { listChanged: true } },
+    serverInfo: { name: 'utilities-server', version: '1.0.0' }
+  }, 3),
+
+  initializedNotification2: jsonRpcNotification('notifications/initialized'),
+
+  toolsListRequest2: jsonRpcRequest('tools/list', {}, 4),
+
+  toolsListResponse2: jsonRpcResponse({
+    tools: SERVER_DEFINITIONS['server-utils'].tools
+  }, 4),
+
+  // --- Act 3: tools/call for read_file ---
+  toolsCallReadFile: jsonRpcRequest('tools/call', {
+    name: 'read_file',
+    arguments: { path: 'notes.txt' }
+  }, 5),
+
+  toolsCallReadFileResult: jsonRpcResponse({
+    content: [
+      { type: 'text', text: SIMULATED_FS['notes.txt'] }
+    ]
+  }, 5),
+
+  // --- Act 4: tools/call for read_file (same) ---
+  toolsCallReadFile2: jsonRpcRequest('tools/call', {
+    name: 'read_file',
+    arguments: { path: 'notes.txt' }
+  }, 6),
+
+  toolsCallReadFileResult2: jsonRpcResponse({
+    content: [
+      { type: 'text', text: SIMULATED_FS['notes.txt'] }
+    ]
+  }, 6),
+
+  // --- Act 4: tools/call for count_words ---
+  toolsCallCountWords: jsonRpcRequest('tools/call', {
+    name: 'count_words',
+    arguments: { text: SIMULATED_FS['notes.txt'] }
+  }, 7),
+
+  toolsCallCountWordsResult: jsonRpcResponse({
+    content: [
+      { type: 'text', text: '13' }
+    ]
+  }, 7),
+};
+
+// ============================================================================
+// 7. PRE-BUILT API PAYLOADS (Anthropic Messages API format)
+// ============================================================================
+
+const API = {
+  // --- Act 2: Simple question ---
+  act2Request: {
+    model: 'claude-sonnet-4-5-20250514',
+    max_tokens: 1024,
+    messages: [
+      { role: 'user', content: 'What is the Model Context Protocol?' }
+    ],
+    tools: API_TOOL_DEFINITIONS,
+  },
+
+  act2Response: {
+    id: 'msg_act2_001',
+    type: 'message',
+    role: 'assistant',
+    content: [
+      {
+        type: 'text',
+        text: 'The Model Context Protocol (MCP) is an open standard that enables AI applications to connect to external data sources and tools in a standardized way. Think of it like a USB-C port for AI — it provides a universal interface so any compatible AI host (like Claude Desktop) can communicate with any compatible server that provides tools, data, or prompt templates.\n\nMCP uses a client-server architecture where the host application maintains MCP clients that connect to MCP servers over JSON-RPC. This means tools and data sources can be swapped in and out without changing the AI application itself.',
+      }
+    ],
+    model: 'claude-sonnet-4-5-20250514',
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 342, output_tokens: 128 },
+  },
+
+  // --- Act 3: Tool question (read_file) ---
+  act3Request1: {
+    model: 'claude-sonnet-4-5-20250514',
+    max_tokens: 1024,
+    messages: [
+      { role: 'user', content: 'Read my notes.txt file' }
+    ],
+    tools: API_TOOL_DEFINITIONS,
+  },
+
+  act3Response1: {
+    id: 'msg_act3_001',
+    type: 'message',
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_use',
+        id: 'toolu_act3_read',
+        name: 'read_file',
+        input: { path: 'notes.txt' },
+      }
+    ],
+    model: 'claude-sonnet-4-5-20250514',
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 356, output_tokens: 42 },
+  },
+
+  act3Request2: {
+    model: 'claude-sonnet-4-5-20250514',
+    max_tokens: 1024,
+    messages: [
+      { role: 'user', content: 'Read my notes.txt file' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_act3_read',
+            name: 'read_file',
+            input: { path: 'notes.txt' },
+          }
+        ]
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_act3_read',
+            content: SIMULATED_FS['notes.txt'],
+          }
+        ]
+      }
+    ],
+    tools: API_TOOL_DEFINITIONS,
+  },
+
+  act3Response2: {
+    id: 'msg_act3_002',
+    type: 'message',
+    role: 'assistant',
+    content: [
+      {
+        type: 'text',
+        text: 'Here are your meeting notes from Monday:\n\n- Discuss Q3 roadmap\n- Review hiring pipeline\n- Finalize budget\n\nIt looks like you have three main agenda items to cover. Would you like me to help you prepare for any of these topics?',
+      }
+    ],
+    model: 'claude-sonnet-4-5-20250514',
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 412, output_tokens: 67 },
+  },
+
+  // --- Act 4: Chained tools (read_file → count_words) ---
+  act4Request1: {
+    model: 'claude-sonnet-4-5-20250514',
+    max_tokens: 1024,
+    messages: [
+      { role: 'user', content: 'Read my notes.txt, then count how many words are in it' }
+    ],
+    tools: API_TOOL_DEFINITIONS,
+  },
+
+  act4Response1: {
+    id: 'msg_act4_001',
+    type: 'message',
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_use',
+        id: 'toolu_act4_read',
+        name: 'read_file',
+        input: { path: 'notes.txt' },
+      }
+    ],
+    model: 'claude-sonnet-4-5-20250514',
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 368, output_tokens: 44 },
+  },
+
+  act4Request2: {
+    model: 'claude-sonnet-4-5-20250514',
+    max_tokens: 1024,
+    messages: [
+      { role: 'user', content: 'Read my notes.txt, then count how many words are in it' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_act4_read',
+            name: 'read_file',
+            input: { path: 'notes.txt' },
+          }
+        ]
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_act4_read',
+            content: SIMULATED_FS['notes.txt'],
+          }
+        ]
+      }
+    ],
+    tools: API_TOOL_DEFINITIONS,
+  },
+
+  act4Response2: {
+    id: 'msg_act4_002',
+    type: 'message',
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_use',
+        id: 'toolu_act4_count',
+        name: 'count_words',
+        input: { text: SIMULATED_FS['notes.txt'] },
+      }
+    ],
+    model: 'claude-sonnet-4-5-20250514',
+    stop_reason: 'tool_use',
+    usage: { input_tokens: 498, output_tokens: 58 },
+  },
+
+  act4Request3: {
+    model: 'claude-sonnet-4-5-20250514',
+    max_tokens: 1024,
+    messages: [
+      { role: 'user', content: 'Read my notes.txt, then count how many words are in it' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_act4_read',
+            name: 'read_file',
+            input: { path: 'notes.txt' },
+          }
+        ]
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_act4_read',
+            content: SIMULATED_FS['notes.txt'],
+          }
+        ]
+      },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_act4_count',
+            name: 'count_words',
+            input: { text: SIMULATED_FS['notes.txt'] },
+          }
+        ]
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_act4_count',
+            content: '13',
+          }
+        ]
+      }
+    ],
+    tools: API_TOOL_DEFINITIONS,
+  },
+
+  act4Response3: {
+    id: 'msg_act4_003',
+    type: 'message',
+    role: 'assistant',
+    content: [
+      {
+        type: 'text',
+        text: 'Here are your notes from Monday:\n\n"Meeting notes from Monday: Discuss Q3 roadmap, review hiring pipeline, finalize budget."\n\nThe document contains **13 words**. It\'s a concise set of agenda items covering three topics: the Q3 roadmap, hiring pipeline review, and budget finalization.',
+      }
+    ],
+    model: 'claude-sonnet-4-5-20250514',
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 587, output_tokens: 72 },
+  },
+};
+
+// ============================================================================
+// 8. ACT METADATA
+// ============================================================================
+
+const ACT_METADATA = [
+  null, // index 0 unused
+  {
+    number: 1,
+    title: 'Configuration & Startup',
+    subtitle: 'The Boot Sequence',
+    description: 'Watch the host read its config, spawn MCP clients, connect to servers, and build a tool registry — all before a single message is sent.',
+    watchFor: 'Notice how each server connection follows the same handshake pattern: initialize → capabilities → tools/list.',
+  },
+  {
+    number: 2,
+    title: 'A Simple Question',
+    subtitle: 'No Tools Needed',
+    description: 'See what happens when the model can answer without any tools — a clean baseline to contrast with the next act.',
+    watchFor: 'The tool definitions are sent to the model even though none are used. The model always has the option.',
+  },
+  {
+    number: 3,
+    title: 'Tool-Triggered Question',
+    subtitle: 'The Full Loop',
+    description: 'The centerpiece: a question that triggers a tool call, routing through the full MCP pipeline.',
+    watchFor: 'Pay attention to WHO does WHAT — the model requests, the host routes, the client translates, and the server executes.',
+  },
+  {
+    number: 4,
+    title: 'Chained Tool Calls',
+    subtitle: 'The Loop Repeats',
+    description: 'Two tools, two different servers, three API calls. The host\'s orchestration loop in full view.',
+    watchFor: 'The second tool call goes to a DIFFERENT server, but the protocol is identical. The host just keeps looping.',
+  },
+];
+
+// ============================================================================
+// 9. STEP SEQUENCES — ALL FOUR ACTS
+// ============================================================================
+
+const STEPS = [
+
+  // =========================================================================
+  // ACT 1 — Configuration & Startup (12 steps)
+  // =========================================================================
+
+  {
+    id: 'act1-step1',
+    act: 1,
+    phase: 'boot',
+    label: 'Parse Configuration',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: MCP_CONFIG,
+    narration: "The host application starts by reading its configuration file — claude_desktop_config.json. This file tells the host which MCP servers exist, how to launch them, and what transport to use. Everything begins here.",
+    stateMutations: { systemPhase: 'booting', hostState: 'parsing_config' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step2',
+    act: 1,
+    phase: 'boot',
+    label: 'Host Initializes',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The host application initializes its core components: the chat UI and the MCP client manager. The model/API connection is separate — the model is selected per chat, not during boot.",
+    stateMutations: { hostState: 'initializing' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step3',
+    act: 1,
+    phase: 'boot',
+    label: 'Spawn MCP Client #1',
+    activeComponents: [C.HOST, C.CLIENT_1],
+    messageFlow: null,
+    message: null,
+    narration: "The host reads the first server entry — 'file-system' — and spawns an MCP Client to manage this connection. The client is generic: the same code is used for every server. Only the configuration differs.",
+    stateMutations: { client1State: 'spawned', server1State: 'disconnected' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step4',
+    act: 1,
+    phase: 'boot',
+    label: 'Connect Transport (stdio)',
+    activeComponents: [C.CLIENT_1, C.TRANSPORT_1, C.SERVER_FILES],
+    messageFlow: { from: C.CLIENT_1, to: C.SERVER_FILES, type: 'transport', label: 'stdio connect' },
+    message: null,
+    narration: "Client #1 establishes a stdio transport — it spawns the server as a child process and connects via stdin/stdout. This is how local MCP servers work: they're separate processes that communicate over standard I/O pipes.",
+    stateMutations: { transport1State: 'connected', server1State: 'connecting' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step5',
+    act: 1,
+    phase: 'boot',
+    label: 'Initialize Handshake (Request)',
+    activeComponents: [C.CLIENT_1, C.TRANSPORT_1, C.SERVER_FILES],
+    messageFlow: { from: C.CLIENT_1, to: C.SERVER_FILES, type: 'jsonrpc_request', label: 'initialize' },
+    message: JSONRPC.initializeRequest1,
+    narration: "The client sends an 'initialize' request — a JSON-RPC 2.0 message. It tells the server: 'Here is my protocol version and the capabilities I support.' This is the first message in the MCP handshake.",
+    stateMutations: { server1State: 'handshaking' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step6',
+    act: 1,
+    phase: 'boot',
+    label: 'Initialize Handshake (Response)',
+    activeComponents: [C.SERVER_FILES, C.TRANSPORT_1, C.CLIENT_1],
+    messageFlow: { from: C.SERVER_FILES, to: C.CLIENT_1, type: 'jsonrpc_response', label: 'initialize result' },
+    message: JSONRPC.initializeResponse1,
+    narration: "The server responds with its own protocol version and capabilities. Both sides now know what the other supports. Notice the 'tools' capability — this server has tools to offer.",
+    stateMutations: {},
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step7',
+    act: 1,
+    phase: 'boot',
+    label: 'Initialized Notification',
+    activeComponents: [C.CLIENT_1, C.TRANSPORT_1, C.SERVER_FILES],
+    messageFlow: { from: C.CLIENT_1, to: C.SERVER_FILES, type: 'jsonrpc_request', label: 'notifications/initialized' },
+    message: JSONRPC.initializedNotification1,
+    narration: "The client sends an 'initialized' notification — note this is a notification, not a request (no 'id' field, so no response expected). The handshake is complete. The connection is now fully established.",
+    stateMutations: { server1State: 'ready' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step8',
+    act: 1,
+    phase: 'boot',
+    label: 'Discover Tools (Server: Files)',
+    activeComponents: [C.CLIENT_1, C.SERVER_FILES],
+    messageFlow: { from: C.CLIENT_1, to: C.SERVER_FILES, type: 'jsonrpc_request', label: 'tools/list' },
+    message: JSONRPC.toolsListRequest1,
+    narration: "Now the client asks: 'What tools do you have?' It sends a tools/list request. The server will respond with every tool it offers, along with descriptions and JSON Schema definitions for their inputs.",
+    stateMutations: {},
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step9',
+    act: 1,
+    phase: 'boot',
+    label: 'Tools Received (Files)',
+    activeComponents: [C.SERVER_FILES, C.CLIENT_1, C.HOST],
+    messageFlow: { from: C.SERVER_FILES, to: C.CLIENT_1, type: 'jsonrpc_response', label: 'tools/list result' },
+    message: JSONRPC.toolsListResponse1,
+    narration: "The File System server reports 3 tools: read_file, write_file, and list_files. Each comes with a complete JSON Schema describing its parameters. The client passes these to the host, which adds them to the tool registry.",
+    stateMutations: { toolRegistryPartial: true, registeredTools: ['read_file', 'write_file', 'list_files'] },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step10',
+    act: 1,
+    phase: 'boot',
+    label: 'Spawn Client #2 & Connect',
+    activeComponents: [C.HOST, C.CLIENT_2, C.TRANSPORT_2, C.SERVER_UTILS],
+    messageFlow: { from: C.CLIENT_2, to: C.SERVER_UTILS, type: 'transport', label: 'stdio connect' },
+    message: null,
+    narration: "The host moves to the second config entry — 'utilities' — and repeats the same process: spawn a new MCP Client, establish a stdio transport, connect to the Utilities server. Same code, different config.",
+    stateMutations: { client2State: 'spawned', transport2State: 'connected', server2State: 'connecting' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step11',
+    act: 1,
+    phase: 'boot',
+    label: 'Handshake & Discover Tools (Utilities)',
+    activeComponents: [C.CLIENT_2, C.TRANSPORT_2, C.SERVER_UTILS],
+    messageFlow: { from: C.CLIENT_2, to: C.SERVER_UTILS, type: 'jsonrpc_request', label: 'initialize + tools/list' },
+    message: {
+      handshake: [JSONRPC.initializeRequest2, JSONRPC.initializeResponse2, JSONRPC.initializedNotification2],
+      discovery: [JSONRPC.toolsListRequest2, JSONRPC.toolsListResponse2],
+    },
+    narration: "The same handshake plays out: initialize request, server response, initialized notification, then tools/list. The Utilities server reports 3 tools: get_current_time, count_words, and calculate. The protocol is identical — that's the beauty of a standardized spec.",
+    stateMutations: { server2State: 'ready', registeredTools: ['read_file', 'write_file', 'list_files', 'get_current_time', 'count_words', 'calculate'] },
+    chatUpdate: null,
+  },
+  {
+    id: 'act1-step12',
+    act: 1,
+    phase: 'boot',
+    label: 'System Ready',
+    activeComponents: [C.HOST, C.MODEL, C.CLIENT_1, C.CLIENT_2, C.SERVER_FILES, C.SERVER_UTILS, C.API],
+    messageFlow: null,
+    message: null,
+    narration: "Before you've typed a single message, the host has already connected to every server and built a complete tool registry: 6 tools across 2 servers. The system is primed and waiting. Everything from here is driven by your conversations with the model.",
+    stateMutations: { systemPhase: 'idle', hostState: 'idle', toolRegistryPartial: false, toolRegistryComplete: true },
+    chatUpdate: null,
+  },
+
+  // =========================================================================
+  // ACT 2 — Simple Question, No Tools (5 steps)
+  // =========================================================================
+
+  {
+    id: 'act2-step1',
+    act: 2,
+    phase: 'message',
+    label: 'User Sends Message',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The user types: \"What is the Model Context Protocol?\" The host receives the message and prepares to forward it to the Anthropic API. No MCP servers are involved yet — this is between the host and the model.",
+    stateMutations: { systemPhase: 'processing', hostState: 'building_request' },
+    chatUpdate: { role: 'user', content: 'What is the Model Context Protocol?' },
+  },
+  {
+    id: 'act2-step2',
+    act: 2,
+    phase: 'api_call',
+    label: 'Build & Send API Request',
+    activeComponents: [C.HOST, C.API],
+    messageFlow: { from: C.HOST, to: C.API, type: 'api_request', label: 'API Request #1' },
+    message: API.act2Request,
+    narration: "The host builds an API request. Look carefully at what's included: the user's message in the messages array — and ALL 6 tool definitions in the tools array. Notice the tool definitions are ALWAYS sent, even when not needed. The model always has the option to use them.",
+    stateMutations: { hostState: 'waiting_for_api', apiCallCount: 1 },
+    chatUpdate: null,
+  },
+  {
+    id: 'act2-step3',
+    act: 2,
+    phase: 'api_response',
+    label: 'API Response: Text Only',
+    activeComponents: [C.API, C.HOST],
+    messageFlow: { from: C.API, to: C.HOST, type: 'api_response', label: 'Response: text' },
+    message: API.act2Response,
+    narration: "The model responds with plain text — no tool_use blocks. It decided this question can be answered from its training data alone. No tools needed. The stop_reason is 'end_turn', meaning the model is done.",
+    stateMutations: { hostState: 'processing_response' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act2-step4',
+    act: 2,
+    phase: 'render',
+    label: 'Host Checks for Tool Use',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The host inspects the response: does it contain any tool_use blocks? No — just text. So the host skips the tool-routing loop entirely. In Act 3, this is where things get interesting.",
+    stateMutations: { hostState: 'rendering' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act2-step5',
+    act: 2,
+    phase: 'render',
+    label: 'Render Response in Chat',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The text is rendered in the chat UI. One API call in, one response out. This is the simplest possible flow. Remember this baseline — in the next act, watch how the flow expands when tools get involved.",
+    stateMutations: { systemPhase: 'idle', hostState: 'idle' },
+    chatUpdate: { role: 'assistant', content: API.act2Response.content[0].text },
+  },
+
+  // =========================================================================
+  // ACT 3 — Tool-Triggered Question: read_file (13 steps)
+  // =========================================================================
+
+  {
+    id: 'act3-step1',
+    act: 3,
+    phase: 'message',
+    label: 'User Sends Message',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The user types: \"Read my notes.txt file\" — a request that clearly requires a tool. But the host doesn't know that yet. It follows the same path as before: build an API request and let the model decide.",
+    stateMutations: { systemPhase: 'processing', hostState: 'building_request' },
+    chatUpdate: { role: 'user', content: 'Read my notes.txt file' },
+  },
+  {
+    id: 'act3-step2',
+    act: 3,
+    phase: 'api_call',
+    label: 'Build & Send API Request #1',
+    activeComponents: [C.HOST, C.API],
+    messageFlow: { from: C.HOST, to: C.API, type: 'api_request', label: 'API Request #1' },
+    message: API.act3Request1,
+    narration: "Same structure as Act 2: the user message plus all 6 tool definitions. The host sends the same kind of request as before. It's the model that will decide whether tools are needed — not the host.",
+    stateMutations: { hostState: 'waiting_for_api', apiCallCount: 1 },
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step3',
+    act: 3,
+    phase: 'api_response',
+    label: 'API Response: tool_use!',
+    activeComponents: [C.API, C.HOST],
+    messageFlow: { from: C.API, to: C.HOST, type: 'api_response', label: 'Response: tool_use' },
+    message: API.act3Response1,
+    narration: "This time the response is different. Instead of text, the model returns a tool_use block: { name: \"read_file\", input: { path: \"notes.txt\" } }. The model doesn't execute anything. It just says: \"I want to call this tool with these arguments.\" The stop_reason is 'tool_use', not 'end_turn'.",
+    stateMutations: { hostState: 'processing_response' },
+    chatUpdate: { role: 'assistant', type: 'tool_use', tool: 'read_file', args: { path: 'notes.txt' }, toolUseId: 'toolu_act3_read' },
+  },
+  {
+    id: 'act3-step4',
+    act: 3,
+    phase: 'tool_routing',
+    label: 'Host Interprets Response',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The HOST interprets the tool_use response. Not the client. Not the model. The HOST. It parses the API response, finds the tool_use block, and looks up 'read_file' in the tool registry to determine which MCP Client owns this tool.",
+    stateMutations: { hostState: 'routing_tool' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step5',
+    act: 3,
+    phase: 'tool_routing',
+    label: 'Look Up Tool Owner',
+    activeComponents: [C.HOST, C.CLIENT_1],
+    messageFlow: null,
+    message: { lookup: 'read_file', result: { server: 'server-files', client: 'client-files' } },
+    narration: "The host's tool registry says: 'read_file' belongs to the File System server, managed by MCP Client #1. The host now knows exactly where to route this request. The model has no idea MCP exists. It just sees tool definitions in its context.",
+    stateMutations: {},
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step6',
+    act: 3,
+    phase: 'tool_routing',
+    label: 'Route to MCP Client #1',
+    activeComponents: [C.HOST, C.CLIENT_1],
+    messageFlow: { from: C.HOST, to: C.CLIENT_1, type: 'internal', label: 'Execute read_file' },
+    message: null,
+    narration: "The host tells MCP Client #1: execute 'read_file' with arguments { path: \"notes.txt\" }. The client will now translate this into the MCP wire protocol.",
+    stateMutations: { client1State: 'sending' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step7',
+    act: 3,
+    phase: 'jsonrpc_request',
+    label: 'JSON-RPC: tools/call',
+    activeComponents: [C.CLIENT_1, C.TRANSPORT_1, C.SERVER_FILES],
+    messageFlow: { from: C.CLIENT_1, to: C.SERVER_FILES, type: 'jsonrpc_request', label: 'tools/call' },
+    message: JSONRPC.toolsCallReadFile,
+    narration: "The client translates the request into a JSON-RPC 2.0 message: method 'tools/call' with the tool name and arguments. This message travels over the stdio transport — through the stdin pipe to the server process.",
+    stateMutations: { client1State: 'waiting', server1State: 'executing' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step8',
+    act: 3,
+    phase: 'server_exec',
+    label: 'Server Executes read_file',
+    activeComponents: [C.SERVER_FILES],
+    messageFlow: null,
+    message: { action: 'read_file', path: 'notes.txt', result: SIMULATED_FS['notes.txt'] },
+    narration: "The server does the real work. It actually reads 'notes.txt' from disk (or in our case, the simulated file system). The server is the only component that touches external resources. Everything else is protocol plumbing.",
+    stateMutations: {},
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step9',
+    act: 3,
+    phase: 'jsonrpc_response',
+    label: 'JSON-RPC: Result',
+    activeComponents: [C.SERVER_FILES, C.TRANSPORT_1, C.CLIENT_1, C.HOST],
+    messageFlow: { from: C.SERVER_FILES, to: C.HOST, type: 'jsonrpc_response', label: 'tools/call result' },
+    message: JSONRPC.toolsCallReadFileResult,
+    narration: "The result travels back through the same chain: Server → stdio transport → Client → Host. The JSON-RPC response wraps the file contents in the standard MCP content format: an array of content blocks with type and text fields.",
+    stateMutations: { server1State: 'ready', client1State: 'idle', hostState: 'injecting_result' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step10',
+    act: 3,
+    phase: 'result_injection',
+    label: 'Inject tool_result',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "This is the step most people miss: the host injects the tool result into the conversation history as a tool_result message. It's formatted as a user-role message with type 'tool_result' and the matching tool_use_id. The user never typed this — the host creates it automatically.",
+    stateMutations: { hostState: 'building_request' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step11',
+    act: 3,
+    phase: 'api_call',
+    label: 'Build & Send API Request #2',
+    activeComponents: [C.HOST, C.API],
+    messageFlow: { from: C.HOST, to: C.API, type: 'api_request', label: 'API Request #2' },
+    message: API.act3Request2,
+    narration: "Now look at this second API request. The messages array has grown from 1 message to 3: (1) the original user message, (2) the assistant's tool_use response, and (3) the injected tool_result. The model is stateless — it needs the full history to continue. This is a SECOND API call for a single user question.",
+    stateMutations: { hostState: 'waiting_for_api', apiCallCount: 2 },
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step12',
+    act: 3,
+    phase: 'api_response',
+    label: 'API Response: Final Text',
+    activeComponents: [C.API, C.HOST],
+    messageFlow: { from: C.API, to: C.HOST, type: 'api_response', label: 'Response: text' },
+    message: API.act3Response2,
+    narration: "Now the model can see the file contents and formulate its answer. It returns plain text — stop_reason is 'end_turn'. No more tool calls. The orchestration loop can exit.",
+    stateMutations: { hostState: 'rendering' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act3-step13',
+    act: 3,
+    phase: 'render',
+    label: 'Render Final Response',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The host renders the final response in the chat. From the user's perspective, they asked a question and got an answer. Behind the scenes: 2 API calls, 1 JSON-RPC round-trip, and the host acting as the invisible orchestrator. The host isn't an agent. It's a loop: send, check for tool_use, route, inject, repeat.",
+    stateMutations: { systemPhase: 'idle', hostState: 'idle', apiCallCount: 0 },
+    chatUpdate: { role: 'assistant', content: API.act3Response2.content[0].text },
+  },
+
+  // =========================================================================
+  // ACT 4 — Chained Tool Calls: read_file → count_words (18 steps)
+  // =========================================================================
+
+  {
+    id: 'act4-step1',
+    act: 4,
+    phase: 'message',
+    label: 'User Sends Message',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The user types: \"Read my notes.txt, then count how many words are in it.\" This will require TWO tools from TWO different servers. But the host doesn't know that yet — it follows the same loop.",
+    stateMutations: { systemPhase: 'processing', hostState: 'building_request' },
+    chatUpdate: { role: 'user', content: 'Read my notes.txt, then count how many words are in it' },
+  },
+  {
+    id: 'act4-step2',
+    act: 4,
+    phase: 'api_call',
+    label: 'Build & Send API Request #1',
+    activeComponents: [C.HOST, C.API],
+    messageFlow: { from: C.HOST, to: C.API, type: 'api_request', label: 'API Request #1' },
+    message: API.act4Request1,
+    narration: "The host builds the first API request: user message + all 6 tools. Same as always. The model will figure out the plan.",
+    stateMutations: { hostState: 'waiting_for_api', apiCallCount: 1 },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step3',
+    act: 4,
+    phase: 'api_response',
+    label: 'API Response: tool_use (read_file)',
+    activeComponents: [C.API, C.HOST],
+    messageFlow: { from: C.API, to: C.HOST, type: 'api_response', label: 'Response: tool_use' },
+    message: API.act4Response1,
+    narration: "The model's first move: read_file. It knows it needs the file contents before it can count words. The model is sequencing the operations — it'll request count_words after it sees the data.",
+    stateMutations: { hostState: 'processing_response' },
+    chatUpdate: { role: 'assistant', type: 'tool_use', tool: 'read_file', args: { path: 'notes.txt' }, toolUseId: 'toolu_act4_read' },
+  },
+  {
+    id: 'act4-step4',
+    act: 4,
+    phase: 'tool_routing',
+    label: 'Host Routes to Client #1',
+    activeComponents: [C.HOST, C.CLIENT_1],
+    messageFlow: { from: C.HOST, to: C.CLIENT_1, type: 'internal', label: 'Execute read_file' },
+    message: null,
+    narration: "The host interprets the tool_use, looks up read_file → File System server → Client #1. Same routing as Act 3. The loop is running.",
+    stateMutations: { hostState: 'routing_tool', client1State: 'sending' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step5',
+    act: 4,
+    phase: 'jsonrpc_request',
+    label: 'JSON-RPC: tools/call (read_file)',
+    activeComponents: [C.CLIENT_1, C.TRANSPORT_1, C.SERVER_FILES],
+    messageFlow: { from: C.CLIENT_1, to: C.SERVER_FILES, type: 'jsonrpc_request', label: 'tools/call' },
+    message: JSONRPC.toolsCallReadFile2,
+    narration: "Client #1 sends the JSON-RPC tools/call to the File System server. Same request format as Act 3 — the protocol doesn't change.",
+    stateMutations: { client1State: 'waiting', server1State: 'executing' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step6',
+    act: 4,
+    phase: 'server_exec',
+    label: 'Server Executes read_file',
+    activeComponents: [C.SERVER_FILES],
+    messageFlow: null,
+    message: { action: 'read_file', path: 'notes.txt', result: SIMULATED_FS['notes.txt'] },
+    narration: "The File System server reads notes.txt and returns the contents. Same execution, same result.",
+    stateMutations: {},
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step7',
+    act: 4,
+    phase: 'jsonrpc_response',
+    label: 'Result Flows Back',
+    activeComponents: [C.SERVER_FILES, C.TRANSPORT_1, C.CLIENT_1, C.HOST],
+    messageFlow: { from: C.SERVER_FILES, to: C.HOST, type: 'jsonrpc_response', label: 'tools/call result' },
+    message: JSONRPC.toolsCallReadFileResult2,
+    narration: "The result flows back through the chain: Server → Client → Host. The host now has the file contents.",
+    stateMutations: { server1State: 'ready', client1State: 'idle', hostState: 'injecting_result' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step8',
+    act: 4,
+    phase: 'api_call',
+    label: 'Inject Result & Send API Request #2',
+    activeComponents: [C.HOST, C.API],
+    messageFlow: { from: C.HOST, to: C.API, type: 'api_request', label: 'API Request #2' },
+    message: API.act4Request2,
+    narration: "The host injects the tool_result and sends API Request #2. The messages array now has 3 entries. Will the model be done, or will it need another tool? Let's see...",
+    stateMutations: { hostState: 'waiting_for_api', apiCallCount: 2 },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step9',
+    act: 4,
+    phase: 'api_response',
+    label: 'API Response: ANOTHER tool_use!',
+    activeComponents: [C.API, C.HOST],
+    messageFlow: { from: C.API, to: C.HOST, type: 'api_response', label: 'Response: tool_use' },
+    message: API.act4Response2,
+    narration: "The model isn't done! It returns ANOTHER tool_use — this time for 'count_words', passing the file contents it just received as the text argument. The model is chaining tools: read first, then count. The host's loop continues.",
+    stateMutations: { hostState: 'processing_response' },
+    chatUpdate: { role: 'assistant', type: 'tool_use', tool: 'count_words', args: { text: SIMULATED_FS['notes.txt'] }, toolUseId: 'toolu_act4_count' },
+  },
+  {
+    id: 'act4-step10',
+    act: 4,
+    phase: 'tool_routing',
+    label: 'Host Looks Up count_words',
+    activeComponents: [C.HOST, C.CLIENT_2],
+    messageFlow: null,
+    message: { lookup: 'count_words', result: { server: 'server-utils', client: 'client-utils' } },
+    narration: "The host looks up 'count_words' in the registry and finds it belongs to the Utilities server — managed by Client #2. Notice we're now talking to a DIFFERENT server. But the protocol is identical.",
+    stateMutations: { hostState: 'routing_tool' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step11',
+    act: 4,
+    phase: 'tool_routing',
+    label: 'Route to MCP Client #2',
+    activeComponents: [C.HOST, C.CLIENT_2],
+    messageFlow: { from: C.HOST, to: C.CLIENT_2, type: 'internal', label: 'Execute count_words' },
+    message: null,
+    narration: "The host routes the call to Client #2. Different client, different server, same pattern. This is why MCP uses a generic client — the routing code doesn't care which server handles the tool.",
+    stateMutations: { client2State: 'sending' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step12',
+    act: 4,
+    phase: 'jsonrpc_request',
+    label: 'JSON-RPC: tools/call (count_words)',
+    activeComponents: [C.CLIENT_2, C.TRANSPORT_2, C.SERVER_UTILS],
+    messageFlow: { from: C.CLIENT_2, to: C.SERVER_UTILS, type: 'jsonrpc_request', label: 'tools/call' },
+    message: JSONRPC.toolsCallCountWords,
+    narration: "Client #2 sends a JSON-RPC tools/call to the Utilities server. Same method, same format — only the tool name and arguments differ. The protocol is the contract.",
+    stateMutations: { client2State: 'waiting', server2State: 'executing' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step13',
+    act: 4,
+    phase: 'server_exec',
+    label: 'Server Executes count_words',
+    activeComponents: [C.SERVER_UTILS],
+    messageFlow: null,
+    message: { action: 'count_words', text: SIMULATED_FS['notes.txt'], result: '13' },
+    narration: "The Utilities server counts the words in the provided text: 13 words. Each server is a focused, single-purpose program. This one just does text and math utilities.",
+    stateMutations: {},
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step14',
+    act: 4,
+    phase: 'jsonrpc_response',
+    label: 'Result Flows Back',
+    activeComponents: [C.SERVER_UTILS, C.TRANSPORT_2, C.CLIENT_2, C.HOST],
+    messageFlow: { from: C.SERVER_UTILS, to: C.HOST, type: 'jsonrpc_response', label: 'tools/call result' },
+    message: JSONRPC.toolsCallCountWordsResult,
+    narration: "The word count result flows back: Server → Client → Host. The host now has both pieces of data the model needs.",
+    stateMutations: { server2State: 'ready', client2State: 'idle', hostState: 'injecting_result' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step15',
+    act: 4,
+    phase: 'api_call',
+    label: 'Inject Result & Send API Request #3',
+    activeComponents: [C.HOST, C.API],
+    messageFlow: { from: C.HOST, to: C.API, type: 'api_request', label: 'API Request #3' },
+    message: API.act4Request3,
+    narration: "The host injects the second tool_result and builds API Request #3. Look at the messages array now — it has 5 entries: the original user message, two tool_use/tool_result pairs. The conversation history grows with every loop iteration. Three API calls for one user question.",
+    stateMutations: { hostState: 'waiting_for_api', apiCallCount: 3 },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step16',
+    act: 4,
+    phase: 'api_response',
+    label: 'API Response: Final Text',
+    activeComponents: [C.API, C.HOST],
+    messageFlow: { from: C.API, to: C.HOST, type: 'api_response', label: 'Response: text' },
+    message: API.act4Response3,
+    narration: "Finally, the model has everything it needs. It returns a text response with the file contents and the word count. stop_reason: 'end_turn'. The orchestration loop can exit.",
+    stateMutations: { hostState: 'rendering' },
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step17',
+    act: 4,
+    phase: 'render',
+    label: 'Host Checks — No More Tool Calls',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The host checks: any more tool_use blocks? No — just text. The loop exits. Three API calls, two tool round-trips, two different servers, one seamless answer.",
+    stateMutations: {},
+    chatUpdate: null,
+  },
+  {
+    id: 'act4-step18',
+    act: 4,
+    phase: 'render',
+    label: 'Render Final Response',
+    activeComponents: [C.HOST],
+    messageFlow: null,
+    message: null,
+    narration: "The host renders the final answer. The user sees a simple response, but behind the scenes: 3 API calls, 2 JSON-RPC tool executions across 2 servers, and the host orchestrated every step. The host isn't an agent. It's a loop: send, check for tool_use, route, inject, repeat. All the intelligence is in the model's decisions.",
+    stateMutations: { systemPhase: 'idle', hostState: 'idle', apiCallCount: 0 },
+    chatUpdate: { role: 'assistant', content: API.act4Response3.content[0].text },
+  },
+];
+
+// ============================================================================
+// 10. STEP INDEX HELPERS
+// ============================================================================
+
+// Pre-compute act boundaries
+const ACT_OFFSETS = {};
+const ACT_LENGTHS = {};
+[1, 2, 3, 4].forEach(act => {
+  const firstIdx = STEPS.findIndex(s => s.act === act);
+  const count = STEPS.filter(s => s.act === act).length;
+  ACT_OFFSETS[act] = firstIdx;
+  ACT_LENGTHS[act] = count;
+});
+
+// ============================================================================
+// 11. INITIAL STATE
+// ============================================================================
+
+const INITIAL_STATE = {
+  systemPhase: 'pre-boot',     // pre-boot | booting | idle | processing
+  hostState: 'idle',
+  client1State: 'none',        // none | spawned | sending | waiting | idle
+  client2State: 'none',
+  server1State: 'disconnected', // disconnected | connecting | handshaking | ready | executing
+  server2State: 'disconnected',
+  transport1State: 'disconnected',
+  transport2State: 'disconnected',
+  toolRegistryPartial: false,
+  toolRegistryComplete: false,
+  registeredTools: [],
+  apiCallCount: 0,
+};
+
+// ============================================================================
+// 12. useSimulation HOOK
+// ============================================================================
+
+function useSimulation() {
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [currentAct, setCurrentAct] = useState(1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playSpeed, setPlaySpeed] = useState(2000); // ms per step
+  const [conversationHistory, setConversationHistory] = useState([]);
+  const [messageLog, setMessageLog] = useState([]);
+  const [componentStates, setComponentStates] = useState({ ...INITIAL_STATE });
+
+  const intervalRef = useRef(null);
+
+  // Derived values
+  const currentStep = STEPS[currentStepIndex] || STEPS[0];
+  const actSteps = STEPS.filter(s => s.act === currentAct);
+  const actStepIndex = currentStepIndex - (ACT_OFFSETS[currentAct] ?? 0);
+  const totalSteps = STEPS.length;
+  const totalActSteps = ACT_LENGTHS[currentAct] ?? 0;
+
+  // Active components and message flow from current step
+  const activeComponents = currentStep.activeComponents || [];
+  const messageFlow = currentStep.messageFlow || null;
+
+  // Build the full tool registry (when complete)
+  const toolRegistry = componentStates.toolRegistryComplete
+    ? API_TOOL_DEFINITIONS
+    : componentStates.registeredTools
+      ? API_TOOL_DEFINITIONS.filter(t => componentStates.registeredTools.includes(t.name))
+      : [];
+
+  // Apply state mutations for a given step index, building cumulatively from start
+  const computeStateAtStep = useCallback((targetIndex) => {
+    const state = { ...INITIAL_STATE };
+    for (let i = 0; i <= targetIndex; i++) {
+      const step = STEPS[i];
+      if (step && step.stateMutations) {
+        Object.assign(state, step.stateMutations);
+      }
+    }
+    return state;
+  }, []);
+
+  // Compute conversation history up to a given step index
+  const computeConversationAtStep = useCallback((targetIndex) => {
+    const history = [];
+    for (let i = 0; i <= targetIndex; i++) {
+      const step = STEPS[i];
+      if (step && step.chatUpdate) {
+        history.push({ ...step.chatUpdate, stepId: step.id });
+      }
+    }
+    return history;
+  }, []);
+
+  // Compute message log up to a given step index
+  const computeMessageLogAtStep = useCallback((targetIndex) => {
+    const log = [];
+    for (let i = 0; i <= targetIndex; i++) {
+      const step = STEPS[i];
+      if (step && step.message && step.messageFlow) {
+        log.push({
+          stepId: step.id,
+          act: step.act,
+          phase: step.phase,
+          label: step.label,
+          flow: step.messageFlow,
+          payload: step.message,
+          timestamp: i,
+        });
+      }
+    }
+    return log;
+  }, []);
+
+  // Navigate to a specific step index
+  const goToStep = useCallback((index) => {
+    const clamped = Math.max(0, Math.min(index, STEPS.length - 1));
+    const step = STEPS[clamped];
+    setCurrentStepIndex(clamped);
+    setCurrentAct(step.act);
+    setComponentStates(computeStateAtStep(clamped));
+    setConversationHistory(computeConversationAtStep(clamped));
+    setMessageLog(computeMessageLogAtStep(clamped));
+  }, [computeStateAtStep, computeConversationAtStep, computeMessageLogAtStep]);
+
+  // Next / Previous
+  const next = useCallback(() => {
+    if (currentStepIndex < STEPS.length - 1) {
+      goToStep(currentStepIndex + 1);
+    } else {
+      setIsPlaying(false);
+    }
+  }, [currentStepIndex, goToStep]);
+
+  const prev = useCallback(() => {
+    if (currentStepIndex > 0) {
+      goToStep(currentStepIndex - 1);
+    }
+  }, [currentStepIndex, goToStep]);
+
+  // Go to act
+  const goToAct = useCallback((act) => {
+    const offset = ACT_OFFSETS[act];
+    if (offset !== undefined) {
+      goToStep(offset);
+    }
+  }, [goToStep]);
+
+  // Play / Pause
+  const play = useCallback(() => {
+    setIsPlaying(true);
+  }, []);
+
+  const pause = useCallback(() => {
+    setIsPlaying(false);
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    setIsPlaying(prev => !prev);
+  }, []);
+
+  // Reset to beginning
+  const reset = useCallback(() => {
+    setIsPlaying(false);
+    goToStep(0);
+  }, [goToStep]);
+
+  // Auto-play timer
+  useEffect(() => {
+    if (isPlaying) {
+      intervalRef.current = setInterval(() => {
+        setCurrentStepIndex(prev => {
+          const nextIdx = prev + 1;
+          if (nextIdx >= STEPS.length) {
+            setIsPlaying(false);
+            return prev;
+          }
+          const step = STEPS[nextIdx];
+          setCurrentAct(step.act);
+          setComponentStates(computeStateAtStep(nextIdx));
+          setConversationHistory(computeConversationAtStep(nextIdx));
+          setMessageLog(computeMessageLogAtStep(nextIdx));
+          return nextIdx;
+        });
+      }, playSpeed);
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [isPlaying, playSpeed, computeStateAtStep, computeConversationAtStep, computeMessageLogAtStep]);
+
+  return {
+    // Current state
+    state: componentStates,
+    currentStep,
+    currentStepIndex,
+    currentAct,
+    actStepIndex,
+    totalActSteps,
+
+    // Step data
+    steps: STEPS,
+    actSteps,
+    totalSteps,
+
+    // Navigation
+    next,
+    prev,
+    play,
+    pause,
+    togglePlay,
+    goToAct,
+    goToStep,
+    reset,
+
+    // Playback
+    isPlaying,
+    playSpeed,
+    setPlaySpeed,
+
+    // Data
+    config: MCP_CONFIG,
+    toolRegistry,
+    toolOwnership: TOOL_OWNERSHIP,
+    conversationHistory,
+    messageLog,
+
+    // Diagram inputs
+    activeComponents,
+    messageFlow,
+    componentStates,
+
+    // Server definitions
+    serverDefinitions: SERVER_DEFINITIONS,
+    apiToolDefinitions: API_TOOL_DEFINITIONS,
+
+    // Act metadata
+    actMetadata: ACT_METADATA,
+    actOffsets: ACT_OFFSETS,
+    actLengths: ACT_LENGTHS,
+
+    // Simulated data
+    simulatedFS: SIMULATED_FS,
+  };
+}
+
+// ============================================================================
+// 13. EXPORTS SUMMARY
+// ============================================================================
+// The following are exported for other agent components to consume:
+//
+// Constants:    COLORS, COMPONENT_IDS
+// Config:       MCP_CONFIG, SIMULATED_FS
+// Definitions:  SERVER_DEFINITIONS, TOOL_OWNERSHIP, API_TOOL_DEFINITIONS
+// Metadata:     ACT_METADATA
+// Hook:         useSimulation()
+//
+// The useSimulation hook is the primary interface. All UI components should
+// call useSimulation() and read the returned state object.
+// ============================================================================
+
+
+// ============================================================================
+// SECTION 6: ARCHITECTURE DIAGRAM
+// ============================================================================
+
+// ============================================================================
+// MCP Glass Box Demo — Architecture Diagram Component
+// ============================================================================
+// SVG-based animated diagram of the MCP architecture. Accepts state from
+// the simulation engine and renders interactive, state-driven visualizations.
+// ============================================================================
+// C = COMPONENT_IDS; (already defined in simulation engine)
+// ============================================================================
+// 1. LAYOUT CONSTANTS
+// ============================================================================
+
+const COMP_RECTS = {
+  [C.API]:          { x: 20,  y: 150, w: 150, h: 110, rx: 14 },
+  [C.HOST]:         { x: 205, y: 30,  w: 460, h: 360, rx: 16 },
+  [C.MODEL]:        { x: 225, y: 150, w: 160, h: 80,  rx: 10 },
+  [C.CLIENT_1]:     { x: 430, y: 65,  w: 190, h: 110, rx: 10 },
+  [C.CLIENT_2]:     { x: 430, y: 220, w: 190, h: 110, rx: 10 },
+  [C.SERVER_FILES]: { x: 730, y: 45,  w: 235, h: 150, rx: 10 },
+  [C.SERVER_UTILS]: { x: 730, y: 230, w: 235, h: 150, rx: 10 },
+};
+
+const COMP_META = {
+  [C.HOST]:         { label: 'Host Application',  sub: '(Claude Desktop)',  ck: 'host' },
+  [C.MODEL]:        { label: 'AI Model',           sub: 'Claude Sonnet',    ck: 'host' },
+  [C.CLIENT_1]:     { label: 'MCP Client #1',      sub: 'Files Client',     ck: 'client' },
+  [C.CLIENT_2]:     { label: 'MCP Client #2',      sub: 'Utils Client',     ck: 'client' },
+  [C.API]:          { label: 'Anthropic API',       sub: 'Messages API',     ck: 'api' },
+  [C.SERVER_FILES]: { label: 'MCP Server',          sub: 'File System',      ck: 'server' },
+  [C.SERVER_UTILS]: { label: 'MCP Server',          sub: 'Utilities',        ck: 'server' },
+};
+
+// Static connection lines (always drawn between components)
+const STATIC_LINES = [
+  { id: 'host-api', p1: [205, 205], p2: [170, 205], ck: 'api',       c1: C.HOST,     c2: C.API },
+  { id: 'c1-s1',    p1: [620, 120], p2: [730, 120], ck: 'transport', c1: C.CLIENT_1, c2: C.SERVER_FILES },
+  { id: 'c2-s2',    p1: [620, 275], p2: [730, 275], ck: 'transport', c1: C.CLIENT_2, c2: C.SERVER_UTILS },
+  { id: 'int-c1',   p1: [385, 190], p2: [430, 120], ck: 'host',      c1: C.MODEL,    c2: C.CLIENT_1, dashed: true },
+  { id: 'int-c2',   p1: [385, 190], p2: [430, 275], ck: 'host',      c1: C.MODEL,    c2: C.CLIENT_2, dashed: true },
+];
+
+// Motion paths for animated message flow (keyed by "from->to")
+const FLOW_PATHS = {
+  'host->anthropic-api':         'M 205 205 L 170 205',
+  'anthropic-api->host':         'M 170 205 L 205 205',
+  'host->client-files':          'M 385 190 L 430 120',
+  'host->client-utils':          'M 385 190 L 430 275',
+  'client-files->server-files':  'M 620 120 L 730 120',
+  'server-files->client-files':  'M 730 120 L 620 120',
+  'client-utils->server-utils':  'M 620 275 L 730 275',
+  'server-utils->client-utils':  'M 730 275 L 620 275',
+  'server-files->host':          'M 730 120 L 620 120 L 430 120 L 385 190',
+  'server-utils->host':          'M 730 275 L 620 275 L 430 275 L 385 190',
+};
+
+// Message flow type to packet color
+const FLOW_COLORS = {
+  api_request:      '#f59e0b',
+  api_response:     '#f59e0b',
+  jsonrpc_request:  '#10b981',
+  jsonrpc_response: '#3b82f6',
+  internal:         '#a855f7',
+  transport:        '#6b7280',
+};
+
+// Component ID to componentStates key
+const STATE_KEYS = {
+  [C.HOST]:         'hostState',
+  [C.CLIENT_1]:     'client1State',
+  [C.CLIENT_2]:     'client2State',
+  [C.SERVER_FILES]: 'server1State',
+  [C.SERVER_UTILS]: 'server2State',
+};
+
+// Tool names owned by each server
+const SERVER_TOOL_NAMES = {
+  [C.SERVER_FILES]: ['read_file', 'write_file', 'list_files'],
+  [C.SERVER_UTILS]: ['get_current_time', 'count_words', 'calculate'],
+};
+
+// ============================================================================
+// 2. HELPER FUNCTIONS
+// ============================================================================
+
+/** Determine if a component has appeared during boot sequence */
+function isVisible(id, cs) {
+  if (!cs.systemPhase || (cs.systemPhase !== 'pre-boot' && cs.systemPhase !== 'booting')) {
+    return true; // After boot, everything visible
+  }
+  if (cs.systemPhase === 'pre-boot') return false;
+  // During boot — derive from component states
+  switch (id) {
+    case C.HOST:         return true;
+    case C.MODEL:        return cs.toolRegistryComplete;
+    case C.CLIENT_1:     return cs.client1State !== 'none';
+    case C.CLIENT_2:     return cs.client2State !== 'none';
+    case C.SERVER_FILES: return cs.server1State !== 'disconnected';
+    case C.SERVER_UTILS: return cs.server2State !== 'disconnected';
+    case C.API:          return cs.toolRegistryComplete;
+    default:             return false;
+  }
+}
+
+/** Format a state value for display (e.g. "building_request" → "building request") */
+function fmtState(raw) {
+  if (!raw || raw === 'none' || raw === 'idle' || raw === 'pre-boot') return null;
+  return raw.replace(/_/g, ' ');
+}
+
+/** Get animation duration based on path length */
+function getFlowDur(from, to) {
+  const key = `${from}->${to}`;
+  if (key.startsWith('server') && key.endsWith('host')) return '1.2s';
+  if (key.includes('anthropic')) return '0.7s';
+  if (key.includes('->client')) return '0.5s';
+  return '0.8s';
+}
+
+// ============================================================================
+// 3. SUB-COMPONENTS
+// ============================================================================
+
+/** Renders a single component box (rect + labels + state badge) */
+function CompBox({ id, active, opacity, stateText, isHost, isServer }) {
+  const r = COMP_RECTS[id];
+  const m = COMP_META[id];
+  if (!r || !m) return null;
+  const color = COLORS[m.ck];
+
+  // Host gets special semi-transparent treatment
+  const fillOpacity = isHost ? 0.12 : 0.3;
+  const strokeW = active ? 2.5 : 1.5;
+  const filter = active ? `url(#glow-${m.ck})` : 'none';
+
+  const cx = r.x + r.w / 2;
+  // Server boxes: left-align labels to make room for tools on the right
+  const labelX = isServer ? r.x + 18 : cx;
+  const labelAnchor = isServer ? 'start' : 'middle';
+  const labelY = isHost ? r.y + 16 : r.y + r.h / 2 - 6;
+  const subY = isHost ? r.y + 30 : r.y + r.h / 2 + 10;
+
+  return (
+    <g style={{ opacity, transition: 'opacity 0.3s ease' }}>
+      <rect
+        x={r.x} y={r.y} width={r.w} height={r.h} rx={r.rx}
+        fill={color.bg} fillOpacity={fillOpacity}
+        stroke={color.border} strokeWidth={strokeW}
+        filter={filter}
+        style={{ transition: 'stroke-width 0.3s ease, filter 0.3s ease' }}
+      />
+      <text
+        x={labelX} y={labelY}
+        textAnchor={labelAnchor} fill={color.text}
+        fontSize={isHost ? 14 : 13} fontWeight="600"
+        fontFamily="system-ui, -apple-system, sans-serif"
+      >
+        {m.label}
+      </text>
+      <text
+        x={labelX} y={subY}
+        textAnchor={labelAnchor} fill={color.text}
+        fontSize={isHost ? 11 : 10} fontFamily="'Courier New', monospace"
+        opacity={0.7}
+      >
+        {m.sub}
+      </text>
+      {/* State badge */}
+      {stateText && (
+        <g>
+          <rect
+            x={cx - stateText.length * 3.5 - 8}
+            y={isHost ? r.y + r.h - 24 : r.y + r.h - 20}
+            width={stateText.length * 7 + 16}
+            height={17} rx={8.5}
+            fill={color.bg} fillOpacity={0.9}
+            stroke={color.border} strokeWidth={0.8}
+          />
+          <text
+            x={cx}
+            y={isHost ? r.y + r.h - 12 : r.y + r.h - 8}
+            textAnchor="middle" fill={color.text}
+            fontSize={9} fontFamily="'Courier New', monospace"
+          >
+            {stateText}
+          </text>
+        </g>
+      )}
+    </g>
+  );
+}
+
+/** Renders tool name badges on a server component (right side) */
+function ToolBadges({ serverId, tools }) {
+  const r = COMP_RECTS[serverId];
+  if (!r || !tools || tools.length === 0) return null;
+  const color = COLORS.server;
+  const dividerX = r.x + r.w * 0.45;
+  const toolX = dividerX + 14;
+  // Vertically center the tool list within the box
+  const totalHeight = (tools.length - 1) * 15;
+  const startY = r.y + r.h / 2 - totalHeight / 2 + 3;
+
+  return (
+    <g style={{ transition: 'opacity 0.5s ease' }}>
+      {/* Vertical divider */}
+      <line
+        x1={dividerX} y1={r.y + 15}
+        x2={dividerX} y2={r.y + r.h - 15}
+        stroke={color.border} strokeWidth={0.5} opacity={0.3}
+      />
+      {tools.map((tool, i) => (
+        <text
+          key={tool}
+          x={toolX} y={startY + i * 15}
+          textAnchor="start" fill={color.text}
+          fontSize={9} fontFamily="'Courier New', monospace"
+          opacity={0.65}
+        >
+          {typeof tool === 'string' ? tool : tool.name}
+        </text>
+      ))}
+    </g>
+  );
+}
+
+/** Renders the animated message flow packet */
+function FlowPacket({ messageFlow, flowId }) {
+  if (!messageFlow) return null;
+  const path = FLOW_PATHS[`${messageFlow.from}->${messageFlow.to}`];
+  if (!path) return null;
+
+  const color = FLOW_COLORS[messageFlow.type] || '#6b7280';
+  const dur = getFlowDur(messageFlow.from, messageFlow.to);
+  const label = messageFlow.label || '';
+
+  return (
+    <g key={`packet-${flowId}`}>
+      {/* Outer glow */}
+      <circle cx="0" cy="0" r="10" fill={color} opacity={0.25} filter="url(#glow-packet)">
+        <animateMotion dur={dur} path={path} fill="freeze" repeatCount="1" calcMode="linear" />
+      </circle>
+      {/* Core dot */}
+      <circle cx="0" cy="0" r="5" fill={color}>
+        <animateMotion dur={dur} path={path} fill="freeze" repeatCount="1" calcMode="linear" />
+      </circle>
+      {/* Bright center */}
+      <circle cx="0" cy="0" r="2" fill="#fff" opacity={0.8}>
+        <animateMotion dur={dur} path={path} fill="freeze" repeatCount="1" calcMode="linear" />
+      </circle>
+      {/* Label */}
+      {label && (
+        <text
+          x="0" y="-14"
+          textAnchor="middle" fill={color}
+          fontSize={9} fontWeight="bold"
+          fontFamily="'Courier New', monospace"
+        >
+          <animateMotion dur={dur} path={path} fill="freeze" repeatCount="1" calcMode="linear" />
+          {label}
+        </text>
+      )}
+    </g>
+  );
+}
+
+// ============================================================================
+// 4. MAIN COMPONENT
+// ============================================================================
+
+function ArchitectureDiagram({
+  activeComponents = [],
+  messageFlow = null,
+  componentStates = {},
+  phase = '',
+  bootProgress = 0,
+  serverTools = {},
+}) {
+  const activeSet = useMemo(() => new Set(activeComponents), [activeComponents]);
+
+  // Track flow changes for unique animation keys
+  const flowIdRef = useRef(0);
+  const prevFlowRef = useRef('');
+  const flowSig = messageFlow ? `${messageFlow.from}|${messageFlow.to}|${messageFlow.label}` : '';
+  if (flowSig !== prevFlowRef.current) {
+    flowIdRef.current++;
+    prevFlowRef.current = flowSig;
+  }
+
+  // Compute visibility for each component
+  const vis = useMemo(() => {
+    const v = {};
+    Object.keys(COMP_RECTS).forEach(id => {
+      v[id] = isVisible(id, componentStates);
+    });
+    return v;
+  }, [componentStates]);
+
+  // Compute opacity: active=1, visible-but-inactive=0.4, not-visible=0.08
+  const getOpacity = (id) => {
+    if (!vis[id]) return 0.08;
+    if (activeSet.has(id)) return 1;
+    return 0.4;
+  };
+
+  // Get state text for a component
+  const getState = (id) => {
+    const key = STATE_KEYS[id];
+    return key ? fmtState(componentStates[key]) : null;
+  };
+
+  // Determine which tools to show on each server
+  const fileTools = useMemo(() => {
+    if (serverTools?.['server-files']) return serverTools['server-files'];
+    const reg = componentStates.registeredTools || [];
+    return SERVER_TOOL_NAMES[C.SERVER_FILES].filter(t => reg.includes(t));
+  }, [serverTools, componentStates.registeredTools]);
+
+  const utilTools = useMemo(() => {
+    if (serverTools?.['server-utils']) return serverTools['server-utils'];
+    const reg = componentStates.registeredTools || [];
+    return SERVER_TOOL_NAMES[C.SERVER_UTILS].filter(t => reg.includes(t));
+  }, [serverTools, componentStates.registeredTools]);
+
+  // Connection line opacity
+  const connOpacity = (c1, c2) => {
+    if (activeSet.has(c1) && activeSet.has(c2)) return 0.8;
+    if (vis[c1] && vis[c2]) return 0.3;
+    return 0.06;
+  };
+
+  // Transport visibility
+  const transportVis = vis[C.CLIENT_1] || vis[C.CLIENT_2] ||
+                       vis[C.SERVER_FILES] || vis[C.SERVER_UTILS];
+
+  // Component ordering: host first (bottom), then internals, then externals
+  const innerIds = [C.MODEL, C.CLIENT_1, C.CLIENT_2];
+  const outerIds = [C.API, C.SERVER_FILES, C.SERVER_UTILS];
+
+  return (
+    <div style={{
+      width: '100%',
+      background: '#1a1a2e',
+      borderRadius: 12,
+      overflow: 'hidden',
+      border: '1px solid rgba(255,255,255,0.06)',
+    }}>
+      <svg
+        viewBox="0 10 1155 441"
+        style={{ width: '100%', height: 'auto', display: 'block' }}
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        {/* ============================================================ */}
+        {/* DEFS: Filters, markers, styles                               */}
+        {/* ============================================================ */}
+        <defs>
+          {/* Glow filters for each color category */}
+          {Object.entries(COLORS).filter(([k]) => k !== 'transport').map(([key, col]) => (
+            <filter key={`glow-${key}`} id={`glow-${key}`} x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="blur" />
+              <feFlood floodColor={col.border} floodOpacity="0.5" result="color" />
+              <feComposite in="color" in2="blur" operator="in" result="shadow" />
+              <feMerge>
+                <feMergeNode in="shadow" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          ))}
+
+          {/* Packet glow */}
+          <filter id="glow-packet" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+
+          {/* Arrow markers */}
+          <marker id="arrow-dim" viewBox="0 0 10 8" refX="9" refY="4"
+            markerWidth="6" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 4 L 0 8 z" fill="#6b7280" opacity="0.5" />
+          </marker>
+          <marker id="arrow-api" viewBox="0 0 10 8" refX="9" refY="4"
+            markerWidth="6" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 4 L 0 8 z" fill={COLORS.api.border} opacity="0.7" />
+          </marker>
+        </defs>
+
+        {/* ============================================================ */}
+        {/* BACKGROUND                                                   */}
+        {/* ============================================================ */}
+        <rect x="0" y="10" width="1155" height="441" fill="#1a1a2e" />
+
+        {/* Subtle dot grid */}
+        <g opacity="0.08">
+          {Array.from({ length: 28 }, (_, i) =>
+            Array.from({ length: 11 }, (_, j) => (
+              <circle
+                key={`dot-${i}-${j}`}
+                cx={i * 40 + 20} cy={j * 40 + 10}
+                r="1" fill="#fff"
+              />
+            ))
+          )}
+        </g>
+
+        {/* ============================================================ */}
+        {/* TRANSPORT BOUNDARY                                           */}
+        {/* ============================================================ */}
+        <g style={{
+          opacity: transportVis ? 0.6 : 0.08,
+          transition: 'opacity 0.3s ease',
+        }}>
+          <line
+            x1="680" y1="40" x2="680" y2="390"
+            stroke={COLORS.transport.border} strokeWidth="1.5"
+            strokeDasharray="8 4"
+          />
+          <text
+            x="680" y="215"
+            textAnchor="middle" fill={COLORS.transport.text}
+            fontSize="10" fontFamily="'Courier New', monospace"
+            transform="rotate(-90, 680, 215)"
+          >
+            Transport Layer (stdio)
+          </text>
+        </g>
+
+        {/* ============================================================ */}
+        {/* STATIC CONNECTION LINES                                      */}
+        {/* ============================================================ */}
+        {STATIC_LINES.map(ln => {
+          const [[x1, y1], [x2, y2]] = [ln.p1, ln.p2];
+          const op = connOpacity(ln.c1, ln.c2);
+          const col = COLORS[ln.ck]?.border || '#6b7280';
+          return (
+            <line
+              key={ln.id}
+              x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke={col} strokeWidth="1.5"
+              strokeDasharray={ln.dashed ? '5 3' : 'none'}
+              markerEnd={ln.id === 'host-api' ? 'url(#arrow-api)' : 'url(#arrow-dim)'}
+              style={{
+                opacity: op,
+                transition: 'opacity 0.3s ease',
+              }}
+            />
+          );
+        })}
+
+        {/* ============================================================ */}
+        {/* HOST CONTAINER (rendered first, as background)               */}
+        {/* ============================================================ */}
+        <CompBox
+          id={C.HOST}
+          active={activeSet.has(C.HOST)}
+          opacity={getOpacity(C.HOST)}
+          stateText={getState(C.HOST)}
+          isHost={true}
+        />
+
+        {/* ============================================================ */}
+        {/* INTERNAL COMPONENTS (inside host)                            */}
+        {/* ============================================================ */}
+        {innerIds.map(id => (
+          <CompBox
+            key={id}
+            id={id}
+            active={activeSet.has(id)}
+            opacity={getOpacity(id)}
+            stateText={getState(id)}
+            isHost={false}
+          />
+        ))}
+
+        {/* ============================================================ */}
+        {/* EXTERNAL COMPONENTS (servers, API)                           */}
+        {/* ============================================================ */}
+        {outerIds.map(id => (
+          <CompBox
+            key={id}
+            id={id}
+            active={activeSet.has(id)}
+            opacity={getOpacity(id)}
+            stateText={getState(id)}
+            isHost={false}
+            isServer={id === C.SERVER_FILES || id === C.SERVER_UTILS}
+          />
+        ))}
+
+        {/* ============================================================ */}
+        {/* TOOL BADGES on servers                                       */}
+        {/* ============================================================ */}
+        {vis[C.SERVER_FILES] && fileTools.length > 0 && (
+          <g style={{ opacity: getOpacity(C.SERVER_FILES), transition: 'opacity 0.5s ease' }}>
+            <ToolBadges serverId={C.SERVER_FILES} tools={fileTools} />
+          </g>
+        )}
+        {vis[C.SERVER_UTILS] && utilTools.length > 0 && (
+          <g style={{ opacity: getOpacity(C.SERVER_UTILS), transition: 'opacity 0.5s ease' }}>
+            <ToolBadges serverId={C.SERVER_UTILS} tools={utilTools} />
+          </g>
+        )}
+
+        {/* ============================================================ */}
+        {/* "Inside Host" / "External" zone labels                       */}
+        {/* ============================================================ */}
+        <text x="640" y="403" fill={COLORS.host.text} fontSize="9"
+          fontFamily="'Courier New', monospace" opacity="0.35"
+          textAnchor="end">
+          &#9668; inside host process
+        </text>
+        <text x="720" y="403" fill={COLORS.server.text} fontSize="9"
+          fontFamily="'Courier New', monospace" opacity="0.35">
+          external server processes &#9658;
+        </text>
+
+        {/* ============================================================ */}
+        {/* ANIMATED MESSAGE FLOW PACKET                                 */}
+        {/* ============================================================ */}
+        {messageFlow && (
+          <FlowPacket messageFlow={messageFlow} flowId={flowIdRef.current} />
+        )}
+
+        {/* ============================================================ */}
+        {/* LEGEND (bottom-right)                                        */}
+        {/* ============================================================ */}
+        <g transform="translate(980, 55)" opacity="0.5">
+          <text x="0" y="0" fill="#9ca3af" fontSize="10" fontWeight="600"
+            fontFamily="system-ui, sans-serif">
+            Message Types
+          </text>
+          {[
+            { color: '#f59e0b', label: 'API call' },
+            { color: '#10b981', label: 'JSON-RPC request' },
+            { color: '#3b82f6', label: 'JSON-RPC response' },
+            { color: '#a855f7', label: 'Internal routing' },
+          ].map((item, i) => (
+            <g key={item.label} transform={`translate(0, ${16 + i * 18})`}>
+              <circle cx="6" cy="-3" r="4" fill={item.color} />
+              <text x="16" y="0" fill="#9ca3af" fontSize="9"
+                fontFamily="'Courier New', monospace">
+                {item.label}
+              </text>
+            </g>
+          ))}
+
+          <text x="0" y={16 + 4 * 18 + 8} fill="#9ca3af" fontSize="10" fontWeight="600"
+            fontFamily="system-ui, sans-serif">
+            Components
+          </text>
+          {[
+            { color: COLORS.host.border, label: 'Host (amber)' },
+            { color: COLORS.client.border, label: 'Client (green)' },
+            { color: COLORS.server.border, label: 'Server (blue)' },
+            { color: COLORS.api.border, label: 'API (purple)' },
+          ].map((item, i) => (
+            <g key={item.label} transform={`translate(0, ${16 + 4 * 18 + 24 + i * 18})`}>
+              <rect x="0" y="-8" width="12" height="8" rx="2"
+                fill="none" stroke={item.color} strokeWidth="1.5" />
+              <text x="18" y="0" fill="#9ca3af" fontSize="9"
+                fontFamily="'Courier New', monospace">
+                {item.label}
+              </text>
+            </g>
+          ))}
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+
+// ============================================================================
+// SECTION 7: MESSAGE INSPECTOR, LOG & CONFIG VIEWER
+// ============================================================================
+
+// ============================================================================
+// MCP Glass Box Demo — Message Inspector, Log Panel & Config Viewer
+// ============================================================================
+// Agent 3: Developer-tools-style panels for inspecting every message flowing
+// through the MCP simulation. Consumes state from useSimulation().
+// ============================================================================
+
+
+// ============================================================================
+// SHARED CONSTANTS
+// ============================================================================
+
+const MONO_FONT = "'Fira Code', 'JetBrains Mono', 'Cascadia Code', monospace";
+
+const SYNTAX = {
+  key:     '#60a5fa',
+  string:  '#34d399',
+  number:  '#fbbf24',
+  boolean: '#f472b6',
+  null:    '#9ca3af',
+  brace:   '#d1d5db',
+  colon:   '#9ca3af',
+  comma:   '#6b7280',
+};
+
+const PANEL_BG = '#0f0f1e';
+const PANEL_BORDER = '#2a2a4a';
+const HIGHLIGHT_BG = 'rgba(96, 165, 250, 0.08)';
+const CURRENT_BG = 'rgba(96, 165, 250, 0.15)';
+
+// Map message flow types to display info
+function getMessageDisplayInfo(logEntry) {
+  if (!logEntry || !logEntry.flow) return { arrow: '→', color: '#9ca3af', label: 'Message', summary: '' };
+
+  const { flow, phase, label } = logEntry;
+  const type = flow.type;
+
+  if (type === 'api_request') {
+    return { arrow: '→', color: COLORS.api.text, label: label || 'API Request', summary: 'Host → Anthropic API' };
+  }
+  if (type === 'api_response') {
+    return { arrow: '←', color: COLORS.api.text, label: label || 'API Response', summary: 'Anthropic API → Host' };
+  }
+  if (type === 'jsonrpc_request') {
+    return { arrow: '→', color: COLORS.client.text, label: flow.label || 'JSON-RPC Request', summary: `${flow.from} → ${flow.to}` };
+  }
+  if (type === 'jsonrpc_response') {
+    return { arrow: '←', color: COLORS.server.text, label: flow.label || 'JSON-RPC Response', summary: `${flow.from} → ${flow.to}` };
+  }
+  if (type === 'transport') {
+    return { arrow: '→', color: COLORS.transport.text, label: flow.label || 'Transport', summary: 'Connection' };
+  }
+  if (type === 'internal') {
+    return { arrow: '→', color: '#c084fc', label: flow.label || 'Internal', summary: `${flow.from} → ${flow.to}` };
+  }
+  return { arrow: '→', color: '#9ca3af', label: label || 'Message', summary: '' };
+}
+
+// ============================================================================
+// JSON SYNTAX HIGHLIGHTER WITH COLLAPSIBLE NODES
+// ============================================================================
+
+function JsonNode({ keyName, value, depth, annotations, lineCounter, isNewInDiff }) {
+  const [collapsed, setCollapsed] = useState(depth > 2);
+  const indent = depth * 16;
+
+  const lineNum = useRef(lineCounter.current);
+  useEffect(() => { lineNum.current = lineCounter.current; }, [lineCounter.current]);
+
+  // Determine annotation for this key
+  const annotation = annotations ? annotations[keyName] : null;
+
+  // Render line number
+  const LineNum = ({ num }) => (
+    <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11, userSelect: 'none' }}>
+      {num}
+    </span>
+  );
+
+  const currentLine = ++lineCounter.current;
+
+  if (value === null) {
+    return (
+      <div style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+        <LineNum num={currentLine} />
+        {keyName !== undefined && (
+          <><span style={{ color: SYNTAX.key }}>"{keyName}"</span><span style={{ color: SYNTAX.colon }}>: </span></>
+        )}
+        <span style={{ color: SYNTAX.null }}>null</span>
+      </div>
+    );
+  }
+
+  if (typeof value === 'boolean') {
+    return (
+      <div style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+        <LineNum num={currentLine} />
+        {keyName !== undefined && (
+          <><span style={{ color: SYNTAX.key }}>"{keyName}"</span><span style={{ color: SYNTAX.colon }}>: </span></>
+        )}
+        <span style={{ color: SYNTAX.boolean }}>{value.toString()}</span>
+      </div>
+    );
+  }
+
+  if (typeof value === 'number') {
+    return (
+      <div style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+        <LineNum num={currentLine} />
+        {keyName !== undefined && (
+          <><span style={{ color: SYNTAX.key }}>"{keyName}"</span><span style={{ color: SYNTAX.colon }}>: </span></>
+        )}
+        <span style={{ color: SYNTAX.number }}>{value}</span>
+      </div>
+    );
+  }
+
+  if (typeof value === 'string') {
+    const displayVal = value.length > 120 ? value.slice(0, 117) + '...' : value;
+    return (
+      <div style={{ paddingLeft: indent, display: 'flex', alignItems: 'flex-start', minHeight: 20 }}>
+        <LineNum num={currentLine} />
+        {keyName !== undefined && (
+          <><span style={{ color: SYNTAX.key }}>"{keyName}"</span><span style={{ color: SYNTAX.colon }}>: </span></>
+        )}
+        <span style={{ color: SYNTAX.string }}>"{displayVal}"</span>
+      </div>
+    );
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return (
+        <div style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+          <LineNum num={currentLine} />
+          {keyName !== undefined && (
+            <><span style={{ color: SYNTAX.key }}>"{keyName}"</span><span style={{ color: SYNTAX.colon }}>: </span></>
+          )}
+          <span style={{ color: SYNTAX.brace }}>[]</span>
+        </div>
+      );
+    }
+
+    const annotationBorder = annotation ? annotation.borderColor : null;
+    const annotationLabel = annotation ? annotation.label : null;
+
+    return (
+      <div style={{
+        borderLeft: annotationBorder ? `2px solid ${annotationBorder}` : undefined,
+        marginLeft: annotationBorder ? -2 : undefined,
+      }}>
+        <div
+          style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20, cursor: 'pointer' }}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          <LineNum num={currentLine} />
+          <span style={{ color: '#6b7280', marginRight: 4, fontSize: 10, width: 12, textAlign: 'center' }}>
+            {collapsed ? '▶' : '▼'}
+          </span>
+          {keyName !== undefined && (
+            <><span style={{ color: SYNTAX.key }}>"{keyName}"</span><span style={{ color: SYNTAX.colon }}>: </span></>
+          )}
+          <span style={{ color: SYNTAX.brace }}>[</span>
+          {collapsed && <span style={{ color: '#6b7280' }}> {value.length} items </span>}
+          {collapsed && <span style={{ color: SYNTAX.brace }}>]</span>}
+          {annotationLabel && (
+            <span style={{
+              marginLeft: 8, fontSize: 10, color: annotationBorder || '#9ca3af',
+              background: `${annotationBorder || '#9ca3af'}15`, padding: '1px 6px', borderRadius: 3,
+            }}>
+              {annotationLabel}
+            </span>
+          )}
+        </div>
+        {!collapsed && (
+          <>
+            {value.map((item, i) => (
+              <JsonNode
+                key={i}
+                value={item}
+                depth={depth + 1}
+                annotations={annotations}
+                lineCounter={lineCounter}
+                isNewInDiff={false}
+              />
+            ))}
+            <div style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+              <LineNum num={++lineCounter.current} />
+              <span style={{ color: SYNTAX.brace }}>]</span>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (keys.length === 0) {
+      return (
+        <div style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+          <LineNum num={currentLine} />
+          {keyName !== undefined && (
+            <><span style={{ color: SYNTAX.key }}>"{keyName}"</span><span style={{ color: SYNTAX.colon }}>: </span></>
+          )}
+          <span style={{ color: SYNTAX.brace }}>{'{}'}</span>
+        </div>
+      );
+    }
+
+    const annotationBorder = annotation ? annotation.borderColor : null;
+    const annotationLabel = annotation ? annotation.label : null;
+
+    return (
+      <div style={{
+        borderLeft: annotationBorder ? `2px solid ${annotationBorder}` : undefined,
+        marginLeft: annotationBorder ? -2 : undefined,
+      }}>
+        <div
+          style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20, cursor: 'pointer' }}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          <LineNum num={currentLine} />
+          <span style={{ color: '#6b7280', marginRight: 4, fontSize: 10, width: 12, textAlign: 'center' }}>
+            {collapsed ? '▶' : '▼'}
+          </span>
+          {keyName !== undefined && (
+            <><span style={{ color: SYNTAX.key }}>"{keyName}"</span><span style={{ color: SYNTAX.colon }}>: </span></>
+          )}
+          <span style={{ color: SYNTAX.brace }}>{'{'}</span>
+          {collapsed && <span style={{ color: '#6b7280' }}> {keys.length} keys </span>}
+          {collapsed && <span style={{ color: SYNTAX.brace }}>{'}'}</span>}
+          {annotationLabel && (
+            <span style={{
+              marginLeft: 8, fontSize: 10, color: annotationBorder || '#9ca3af',
+              background: `${annotationBorder || '#9ca3af'}15`, padding: '1px 6px', borderRadius: 3,
+            }}>
+              {annotationLabel}
+            </span>
+          )}
+        </div>
+        {!collapsed && (
+          <>
+            {keys.map((k) => (
+              <JsonNode
+                key={k}
+                keyName={k}
+                value={value[k]}
+                depth={depth + 1}
+                annotations={annotations}
+                lineCounter={lineCounter}
+                isNewInDiff={false}
+              />
+            ))}
+            <div style={{ paddingLeft: indent, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+              <LineNum num={++lineCounter.current} />
+              <span style={{ color: SYNTAX.brace }}>{'}'}</span>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// ============================================================================
+// PAYLOAD INSPECTOR
+// ============================================================================
+
+function PayloadInspector({ message, previousApiRequest }) {
+  const [copied, setCopied] = useState(false);
+  const lineCounter = useRef(0);
+
+  const payload = message ? (message.payload || message) : null;
+
+  const handleCopy = useCallback(() => {
+    if (!payload) return;
+    navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [payload]);
+
+  if (!message) {
+    return (
+      <div style={{
+        background: PANEL_BG,
+        border: `1px solid ${PANEL_BORDER}`,
+        borderRadius: 6,
+        padding: 16,
+        fontFamily: MONO_FONT,
+        fontSize: 12,
+        color: '#6b7280',
+        minHeight: 120,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        Select a message to inspect its payload
+      </div>
+    );
+  }
+
+  // Build annotation map for special fields
+  const annotations = {
+    tool_use: { borderColor: '#f59e0b', label: 'Model requesting tool call' },
+    tool_result: { borderColor: '#10b981', label: 'Injected by host' },
+    tools: { borderColor: '#3b82f6', label: 'Discovered from MCP servers during boot' },
+    content: null, // we'll annotate content items individually below
+  };
+
+  // Check if this is an API request with messages array — detect new messages for diff
+  const isDiffMode = previousApiRequest && payload.messages && previousApiRequest.messages;
+  const prevMessageCount = isDiffMode ? previousApiRequest.messages.length : 0;
+
+  lineCounter.current = 0;
+
+  return (
+    <div style={{
+      background: PANEL_BG,
+      border: `1px solid ${PANEL_BORDER}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontFamily: MONO_FONT,
+      fontSize: 12,
+      position: 'relative',
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: '8px 12px',
+        borderBottom: `1px solid ${PANEL_BORDER}`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: 'rgba(42,42,74,0.3)',
+      }}>
+        <span style={{ color: '#d1d5db', fontSize: 11, fontWeight: 600, letterSpacing: 0.5 }}>
+          PAYLOAD INSPECTOR
+        </span>
+        <button
+          onClick={handleCopy}
+          style={{
+            background: copied ? 'rgba(52,211,153,0.2)' : 'rgba(96,165,250,0.1)',
+            border: `1px solid ${copied ? '#34d399' : '#3b82f6'}`,
+            borderRadius: 4,
+            color: copied ? '#34d399' : '#60a5fa',
+            fontSize: 10,
+            padding: '3px 8px',
+            cursor: 'pointer',
+            fontFamily: MONO_FONT,
+            transition: 'all 0.2s',
+          }}
+        >
+          {copied ? '✓ Copied' : 'Copy'}
+        </button>
+      </div>
+
+      {/* JSON content */}
+      <div style={{
+        padding: '8px 4px',
+        maxHeight: 360,
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        lineHeight: 1.5,
+      }}>
+        {/* Diff badge for API Request #2+ */}
+        {isDiffMode && (
+          <div style={{
+            margin: '0 8px 8px 8px',
+            padding: '4px 8px',
+            background: 'rgba(52,211,153,0.1)',
+            border: '1px solid rgba(52,211,153,0.3)',
+            borderRadius: 4,
+            fontSize: 11,
+            color: '#34d399',
+          }}>
+            Diff view: {payload.messages.length - prevMessageCount} new message{payload.messages.length - prevMessageCount !== 1 ? 's' : ''} since previous request
+          </div>
+        )}
+
+        {/* Render JSON with special handling for messages array diff */}
+        {isDiffMode ? (
+          <DiffJsonView
+            payload={payload}
+            prevMessageCount={prevMessageCount}
+            annotations={annotations}
+          />
+        ) : (
+          <JsonNode
+            value={payload}
+            depth={0}
+            annotations={annotations}
+            lineCounter={lineCounter}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// DIFF JSON VIEW — highlights new messages in the messages array
+// ============================================================================
+
+function DiffJsonView({ payload, prevMessageCount, annotations }) {
+  const lineCounter = useRef(0);
+
+  // Render the object keys manually so we can special-case "messages"
+  const keys = Object.keys(payload);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', minHeight: 20 }}>
+        <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11 }}>
+          {++lineCounter.current}
+        </span>
+        <span style={{ color: SYNTAX.brace }}>{'{'}</span>
+      </div>
+      {keys.map((k) => {
+        if (k === 'messages' && Array.isArray(payload[k])) {
+          return (
+            <DiffMessagesArray
+              key={k}
+              messages={payload[k]}
+              prevMessageCount={prevMessageCount}
+              lineCounter={lineCounter}
+              annotations={annotations}
+            />
+          );
+        }
+        return (
+          <JsonNode
+            key={k}
+            keyName={k}
+            value={payload[k]}
+            depth={1}
+            annotations={annotations}
+            lineCounter={lineCounter}
+          />
+        );
+      })}
+      <div style={{ display: 'flex', alignItems: 'center', minHeight: 20 }}>
+        <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11 }}>
+          {++lineCounter.current}
+        </span>
+        <span style={{ color: SYNTAX.brace }}>{'}'}</span>
+      </div>
+    </div>
+  );
+}
+
+function DiffMessagesArray({ messages, prevMessageCount, lineCounter, annotations }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const currentLine = ++lineCounter.current;
+
+  return (
+    <div>
+      <div
+        style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', minHeight: 20, cursor: 'pointer' }}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11 }}>
+          {currentLine}
+        </span>
+        <span style={{ color: '#6b7280', marginRight: 4, fontSize: 10, width: 12, textAlign: 'center' }}>
+          {collapsed ? '▶' : '▼'}
+        </span>
+        <span style={{ color: SYNTAX.key }}>"messages"</span>
+        <span style={{ color: SYNTAX.colon }}>: </span>
+        <span style={{ color: SYNTAX.brace }}>[</span>
+        {collapsed && <span style={{ color: '#6b7280' }}> {messages.length} items </span>}
+        {collapsed && <span style={{ color: SYNTAX.brace }}>]</span>}
+      </div>
+      {!collapsed && (
+        <>
+          {messages.map((msg, i) => {
+            const isNew = i >= prevMessageCount;
+            const msgAnnotation = getMsgAnnotation(msg);
+            return (
+              <div
+                key={i}
+                style={{
+                  borderLeft: isNew ? '3px solid #34d399' : msgAnnotation ? `2px solid ${msgAnnotation.borderColor}` : undefined,
+                  marginLeft: isNew ? -1 : undefined,
+                  background: isNew ? 'rgba(52,211,153,0.06)' : undefined,
+                  position: 'relative',
+                }}
+              >
+                {isNew && (
+                  <span style={{
+                    position: 'absolute',
+                    right: 8,
+                    top: 2,
+                    fontSize: 9,
+                    fontWeight: 700,
+                    color: '#34d399',
+                    background: 'rgba(52,211,153,0.15)',
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    letterSpacing: 0.5,
+                  }}>
+                    +NEW
+                  </span>
+                )}
+                {msgAnnotation && (
+                  <span style={{
+                    position: 'absolute',
+                    right: isNew ? 52 : 8,
+                    top: 2,
+                    fontSize: 9,
+                    color: msgAnnotation.borderColor,
+                    background: `${msgAnnotation.borderColor}15`,
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                  }}>
+                    {msgAnnotation.label}
+                  </span>
+                )}
+                <JsonNode
+                  value={msg}
+                  depth={2}
+                  annotations={annotations}
+                  lineCounter={lineCounter}
+                />
+              </div>
+            );
+          })}
+          <div style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+            <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11 }}>
+              {++lineCounter.current}
+            </span>
+            <span style={{ color: SYNTAX.brace }}>]</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function getMsgAnnotation(msg) {
+  if (!msg) return null;
+  if (msg.role === 'user' && Array.isArray(msg.content)) {
+    const hasToolResult = msg.content.some(c => c.type === 'tool_result');
+    if (hasToolResult) return { borderColor: '#10b981', label: 'Tool result (injected)' };
+  }
+  if (msg.role === 'user' && typeof msg.content === 'string') {
+    return { borderColor: '#9ca3af', label: 'User message' };
+  }
+  if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+    const hasToolUse = msg.content.some(c => c.type === 'tool_use');
+    if (hasToolUse) return { borderColor: '#f59e0b', label: 'Assistant (tool_use)' };
+    return { borderColor: '#c084fc', label: 'Assistant response' };
+  }
+  if (msg.role === 'assistant' && typeof msg.content === 'string') {
+    return { borderColor: '#c084fc', label: 'Assistant response' };
+  }
+  return null;
+}
+
+// ============================================================================
+// MESSAGE LOG
+// ============================================================================
+
+function MessageLog({ messageLog, currentStepIndex, onSelectMessage }) {
+  const [selectedIdx, setSelectedIdx] = useState(null);
+  const scrollRef = useRef(null);
+  const currentRef = useRef(null);
+
+  // Find which log entry corresponds to the current step
+  const currentLogIdx = useMemo(() => {
+    if (!messageLog || messageLog.length === 0) return -1;
+    // Find the latest log entry whose timestamp <= currentStepIndex
+    let latest = -1;
+    for (let i = 0; i < messageLog.length; i++) {
+      if (messageLog[i].timestamp <= currentStepIndex) latest = i;
+    }
+    return latest;
+  }, [messageLog, currentStepIndex]);
+
+  // Auto-scroll to current message
+  useEffect(() => {
+    if (currentRef.current) {
+      currentRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [currentLogIdx]);
+
+  const handleSelect = useCallback((idx) => {
+    setSelectedIdx(idx);
+    if (onSelectMessage && messageLog[idx]) {
+      onSelectMessage(messageLog[idx]);
+    }
+  }, [onSelectMessage, messageLog]);
+
+  if (!messageLog || messageLog.length === 0) {
+    return (
+      <div style={{
+        background: PANEL_BG,
+        border: `1px solid ${PANEL_BORDER}`,
+        borderRadius: 6,
+        padding: 16,
+        fontFamily: MONO_FONT,
+        fontSize: 12,
+        color: '#6b7280',
+        minHeight: 80,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        No messages yet — step forward to see the flow
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      background: PANEL_BG,
+      border: `1px solid ${PANEL_BORDER}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontFamily: MONO_FONT,
+      fontSize: 12,
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: '8px 12px',
+        borderBottom: `1px solid ${PANEL_BORDER}`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: 'rgba(42,42,74,0.3)',
+      }}>
+        <span style={{ color: '#d1d5db', fontSize: 11, fontWeight: 600, letterSpacing: 0.5 }}>
+          MESSAGE LOG
+        </span>
+        <span style={{ color: '#6b7280', fontSize: 10 }}>
+          {messageLog.length} message{messageLog.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {/* Scrolling log */}
+      <div
+        ref={scrollRef}
+        style={{
+          maxHeight: 240,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+        }}
+      >
+        {messageLog.map((entry, idx) => {
+          const info = getMessageDisplayInfo(entry);
+          const isCurrent = idx === currentLogIdx;
+          const isSelected = idx === selectedIdx;
+
+          return (
+            <div
+              key={entry.stepId + '-' + idx}
+              ref={isCurrent ? currentRef : null}
+              onClick={() => handleSelect(idx)}
+              style={{
+                padding: '6px 12px',
+                borderLeft: `3px solid ${info.color}`,
+                background: isCurrent ? CURRENT_BG : isSelected ? HIGHLIGHT_BG : 'transparent',
+                cursor: 'pointer',
+                borderBottom: `1px solid ${PANEL_BORDER}`,
+                transition: 'background 0.2s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+              onMouseEnter={(e) => {
+                if (!isCurrent && !isSelected) e.currentTarget.style.background = 'rgba(96,165,250,0.05)';
+              }}
+              onMouseLeave={(e) => {
+                if (!isCurrent && !isSelected) e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              {/* Direction arrow */}
+              <span style={{
+                color: info.color,
+                fontSize: 14,
+                fontWeight: 700,
+                flexShrink: 0,
+                width: 16,
+                textAlign: 'center',
+              }}>
+                {info.arrow}
+              </span>
+
+              {/* Label & summary */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{
+                  color: info.color,
+                  fontWeight: 600,
+                  fontSize: 11,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}>
+                  {info.label}
+                </div>
+                <div style={{
+                  color: '#6b7280',
+                  fontSize: 10,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}>
+                  {info.summary}
+                </div>
+              </div>
+
+              {/* Act badge */}
+              <span style={{
+                fontSize: 9,
+                color: '#9ca3af',
+                background: 'rgba(156,163,175,0.1)',
+                padding: '1px 5px',
+                borderRadius: 3,
+                flexShrink: 0,
+              }}>
+                Act {entry.act}
+              </span>
+
+              {/* Current indicator */}
+              {isCurrent && (
+                <span style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: '#60a5fa',
+                  boxShadow: '0 0 6px rgba(96,165,250,0.6)',
+                  flexShrink: 0,
+                }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// CONFIG VIEWER
+// ============================================================================
+
+function ConfigViewer({ config, isExpanded, onToggle }) {
+  const lineCounter = useRef(0);
+
+  // Annotations for config fields
+  const configAnnotations = {
+    mcpServers: { borderColor: '#3b82f6', label: 'This is where you define MCP servers' },
+  };
+
+  return (
+    <div style={{
+      background: PANEL_BG,
+      border: `1px solid ${PANEL_BORDER}`,
+      borderRadius: 6,
+      overflow: 'hidden',
+      fontFamily: MONO_FONT,
+      fontSize: 12,
+    }}>
+      {/* Header — clickable toggle */}
+      <div
+        onClick={onToggle}
+        style={{
+          padding: '8px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          cursor: 'pointer',
+          background: 'rgba(42,42,74,0.3)',
+          borderBottom: isExpanded ? `1px solid ${PANEL_BORDER}` : 'none',
+          transition: 'background 0.2s',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(42,42,74,0.5)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(42,42,74,0.3)'; }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: '#6b7280', fontSize: 10 }}>
+            {isExpanded ? '▼' : '▶'}
+          </span>
+          <span style={{ color: '#d1d5db', fontSize: 11, fontWeight: 600, letterSpacing: 0.5 }}>
+            CONFIG VIEWER
+          </span>
+          <span style={{
+            fontSize: 10,
+            color: '#9ca3af',
+            fontStyle: 'italic',
+          }}>
+            claude_desktop_config.json
+          </span>
+        </div>
+        {!isExpanded && (
+          <span style={{ color: '#6b7280', fontSize: 10 }}>
+            Click to expand
+          </span>
+        )}
+      </div>
+
+      {/* Collapsible content */}
+      {isExpanded && config && (
+        <div style={{
+          padding: '8px 4px',
+          maxHeight: 300,
+          overflowY: 'auto',
+          lineHeight: 1.5,
+        }}>
+          {(() => {
+            lineCounter.current = 0;
+            return null;
+          })()}
+
+          {/* Render top-level object */}
+          <div style={{ display: 'flex', alignItems: 'center', minHeight: 20 }}>
+            <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11 }}>
+              {++lineCounter.current}
+            </span>
+            <span style={{ color: SYNTAX.brace }}>{'{'}</span>
+          </div>
+
+          {Object.keys(config).map((key) => {
+            const annotation = configAnnotations[key];
+            if (key === 'mcpServers' && typeof config[key] === 'object') {
+              return (
+                <ConfigServersSection
+                  key={key}
+                  servers={config[key]}
+                  annotation={annotation}
+                  lineCounter={lineCounter}
+                />
+              );
+            }
+            return (
+              <JsonNode
+                key={key}
+                keyName={key}
+                value={config[key]}
+                depth={1}
+                annotations={configAnnotations}
+                lineCounter={lineCounter}
+              />
+            );
+          })}
+
+          <div style={{ display: 'flex', alignItems: 'center', minHeight: 20 }}>
+            <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11 }}>
+              {++lineCounter.current}
+            </span>
+            <span style={{ color: SYNTAX.brace }}>{'}'}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfigServersSection({ servers, annotation, lineCounter }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const currentLine = ++lineCounter.current;
+  const serverKeys = Object.keys(servers);
+
+  return (
+    <div style={{
+      borderLeft: annotation ? `2px solid ${annotation.borderColor}` : undefined,
+      marginLeft: annotation ? -2 : undefined,
+    }}>
+      <div
+        style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', minHeight: 20, cursor: 'pointer' }}
+        onClick={() => setCollapsed(!collapsed)}
+      >
+        <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11 }}>
+          {currentLine}
+        </span>
+        <span style={{ color: '#6b7280', marginRight: 4, fontSize: 10, width: 12, textAlign: 'center' }}>
+          {collapsed ? '▶' : '▼'}
+        </span>
+        <span style={{ color: SYNTAX.key }}>"mcpServers"</span>
+        <span style={{ color: SYNTAX.colon }}>: </span>
+        <span style={{ color: SYNTAX.brace }}>{'{'}</span>
+        {collapsed && <span style={{ color: '#6b7280' }}> {serverKeys.length} servers </span>}
+        {collapsed && <span style={{ color: SYNTAX.brace }}>{'}'}</span>}
+        {annotation && (
+          <span style={{
+            marginLeft: 8, fontSize: 10, color: annotation.borderColor,
+            background: `${annotation.borderColor}15`, padding: '1px 6px', borderRadius: 3,
+          }}>
+            {annotation.label}
+          </span>
+        )}
+      </div>
+
+      {!collapsed && (
+        <>
+          {serverKeys.map((serverName) => {
+            const server = servers[serverName];
+            const transport = server.transport || 'stdio';
+            return (
+              <div key={serverName} style={{ position: 'relative' }}>
+                <span style={{
+                  position: 'absolute',
+                  right: 8,
+                  top: 2,
+                  fontSize: 9,
+                  color: COLORS.transport.text,
+                  background: 'rgba(107,114,128,0.15)',
+                  padding: '1px 5px',
+                  borderRadius: 3,
+                }}>
+                  transport: {transport}
+                </span>
+                <JsonNode
+                  keyName={serverName}
+                  value={server}
+                  depth={2}
+                  annotations={{}}
+                  lineCounter={lineCounter}
+                />
+              </div>
+            );
+          })}
+          <div style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', minHeight: 20 }}>
+            <span style={{ color: '#4a4a6a', marginRight: 8, minWidth: 28, display: 'inline-block', textAlign: 'right', fontSize: 11 }}>
+              {++lineCounter.current}
+            </span>
+            <span style={{ color: SYNTAX.brace }}>{'}'}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// SCROLLBAR STYLES (injected once)
+// ============================================================================
+
+// Scrollbar styles are defined globally in the HTML <style> block
+
+
+// ============================================================================
+// SECTION 8: CHAT PANEL, STEP NARRATOR & ACT TRANSITIONS
+// ============================================================================
+
+// ============================================================================
+// MCP Glass Box Demo — Chat Interface, Step Narrator & Act Transitions
+// ============================================================================
+// Components: ChatPanel, StepNarrator, ActTransition
+// Consumes state from the useSimulation hook in simulation-engine.jsx
+// ============================================================================
+
+
+// ============================================================================
+// SHARED CONSTANTS
+// ============================================================================
+
+const PHASE_COLORS = {
+  boot:              { bg: COLORS.host.bg,      text: COLORS.host.text,      label: 'BOOT SEQUENCE' },
+  message:           { bg: '#4a3728',            text: '#fbbf24',             label: 'USER MESSAGE' },
+  api_call:          { bg: COLORS.api.bg,        text: COLORS.api.text,       label: 'API CALL' },
+  api_response:      { bg: COLORS.api.bg,        text: COLORS.api.text,       label: 'API RESPONSE' },
+  tool_routing:      { bg: COLORS.client.bg,     text: COLORS.client.text,    label: 'TOOL ROUTING' },
+  jsonrpc_request:   { bg: COLORS.client.bg,     text: COLORS.client.text,    label: 'JSON-RPC REQUEST' },
+  server_exec:       { bg: COLORS.server.bg,     text: COLORS.server.text,    label: 'SERVER EXECUTION' },
+  jsonrpc_response:  { bg: COLORS.server.bg,     text: COLORS.server.text,    label: 'JSON-RPC RESPONSE' },
+  result_injection:  { bg: '#4a3728',            text: '#fbbf24',             label: 'RESULT INJECTION' },
+  render:            { bg: '#374151',            text: '#9ca3af',             label: 'RENDER' },
+};
+
+const FONT = {
+  sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  mono: "'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace",
+};
+
+// ============================================================================
+// 1. ChatPanel
+// ============================================================================
+
+function ChatPanel({ conversationHistory, currentStep, isWaitingForApi }) {
+  const scrollRef = useRef(null);
+  const [expandedTools, setExpandedTools] = useState({});
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [conversationHistory]);
+
+  const toggleToolExpand = (id) => {
+    setExpandedTools(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const hasMessages = conversationHistory && conversationHistory.length > 0;
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      height: '100%',
+      background: '#11111b',
+      borderRadius: 12,
+      overflow: 'hidden',
+      fontFamily: FONT.sans,
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: '12px 16px',
+        borderBottom: '1px solid #2a2a3c',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexShrink: 0,
+      }}>
+        <div style={{
+          width: 8, height: 8,
+          borderRadius: '50%',
+          background: hasMessages ? '#10b981' : '#6b7280',
+          boxShadow: hasMessages ? '0 0 6px rgba(16,185,129,0.5)' : 'none',
+        }} />
+        <span style={{ color: '#e2e8f0', fontSize: 14, fontWeight: 600 }}>
+          Chat
+        </span>
+        {currentStep && currentStep.act > 1 && (
+          <span style={{ color: '#6b7280', fontSize: 12, marginLeft: 'auto' }}>
+            Act {currentStep.act}
+          </span>
+        )}
+      </div>
+
+      {/* Message area */}
+      <div
+        ref={scrollRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+        }}
+      >
+        {!hasMessages && (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexDirection: 'column',
+            gap: 8,
+          }}>
+            <span style={{ fontSize: 32, opacity: 0.3 }}>💬</span>
+            <span style={{ color: '#6b7280', fontSize: 14, textAlign: 'center' }}>
+              Start a conversation to begin...
+            </span>
+          </div>
+        )}
+
+        {hasMessages && conversationHistory.map((msg, i) => (
+          <ChatMessage
+            key={msg.stepId + '-' + i}
+            message={msg}
+            expanded={expandedTools[msg.toolUseId]}
+            onToggleTool={() => msg.toolUseId && toggleToolExpand(msg.toolUseId)}
+          />
+        ))}
+
+        {/* Typing indicator */}
+        {isWaitingForApi && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+          }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: '50%',
+              background: 'linear-gradient(135deg, #c084fc, #a855f7)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 14, flexShrink: 0,
+            }}>
+              ✦
+            </div>
+            <div style={{
+              background: '#1e1e2e',
+              borderRadius: '12px 12px 12px 4px',
+              padding: '12px 16px',
+              display: 'flex',
+              gap: 4,
+              alignItems: 'center',
+            }}>
+              <TypingDot delay={0} />
+              <TypingDot delay={150} />
+              <TypingDot delay={300} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- Chat sub-components ---
+
+function TypingDot({ delay }) {
+  return (
+    <span style={{
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      background: '#a855f7',
+      display: 'inline-block',
+      animation: `typingBounce 1.2s ease-in-out ${delay}ms infinite`,
+    }}>
+      <style>{`
+        @keyframes typingBounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+          30% { transform: translateY(-6px); opacity: 1; }
+        }
+      `}</style>
+    </span>
+  );
+}
+
+function ChatMessage({ message, expanded, onToggleTool }) {
+  const isUser = message.role === 'user';
+  const isToolUse = message.type === 'tool_use';
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: isUser ? 'flex-end' : 'flex-start',
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 8,
+        maxWidth: '88%',
+        flexDirection: isUser ? 'row-reverse' : 'row',
+      }}>
+        {/* Avatar */}
+        {!isUser && (
+          <div style={{
+            width: 28, height: 28, borderRadius: '50%',
+            background: 'linear-gradient(135deg, #c084fc, #a855f7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 14, flexShrink: 0, color: '#fff',
+          }}>
+            ✦
+          </div>
+        )}
+
+        {/* Bubble */}
+        <div style={{
+          background: isUser ? '#2d2b55' : '#1e1e2e',
+          borderRadius: isUser ? '12px 12px 4px 12px' : '12px 12px 12px 4px',
+          padding: isToolUse ? '0' : '10px 14px',
+          border: isToolUse ? '1px solid #4a3728' : '1px solid transparent',
+          overflow: 'hidden',
+        }}>
+          {isToolUse ? (
+            <ToolCallBubble
+              tool={message.tool}
+              args={message.args}
+              expanded={expanded}
+              onToggle={onToggleTool}
+            />
+          ) : (
+            <div style={{
+              color: '#e2e8f0',
+              fontSize: 14,
+              lineHeight: 1.55,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            }}>
+              {message.content}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ToolCallBubble({ tool, args, expanded, onToggle }) {
+  const argsStr = args
+    ? Object.entries(args).map(([k, v]) => {
+        const val = typeof v === 'string'
+          ? (v.length > 40 ? v.slice(0, 37) + '...' : v)
+          : JSON.stringify(v);
+        return `${k}: ${val}`;
+      }).join(', ')
+    : '';
+
+  return (
+    <div>
+      {/* Collapsed pill */}
+      <button
+        onClick={onToggle}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px',
+          width: '100%',
+          border: 'none',
+          background: 'transparent',
+          cursor: 'pointer',
+          textAlign: 'left',
+          fontFamily: FONT.sans,
+        }}
+      >
+        <span style={{ fontSize: 14 }}>🔧</span>
+        <span style={{
+          color: '#fbbf24',
+          fontSize: 13,
+          fontWeight: 600,
+        }}>
+          Used tool: {tool}
+        </span>
+        <span style={{
+          color: '#6b7280',
+          fontSize: 12,
+          fontFamily: FONT.mono,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          flex: 1,
+        }}>
+          ({argsStr})
+        </span>
+        <span style={{
+          color: '#6b7280',
+          fontSize: 10,
+          transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+          transition: 'transform 0.2s ease',
+        }}>
+          ▼
+        </span>
+      </button>
+
+      {/* Expanded args */}
+      {expanded && args && (
+        <div style={{
+          padding: '0 12px 10px 12px',
+          borderTop: '1px solid #2a2a3c',
+        }}>
+          <pre style={{
+            margin: '8px 0 0 0',
+            padding: 8,
+            background: '#13131d',
+            borderRadius: 6,
+            fontSize: 12,
+            fontFamily: FONT.mono,
+            color: '#c084fc',
+            overflowX: 'auto',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}>
+            {JSON.stringify(args, null, 2)}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ============================================================================
+// 2. StepNarrator
+// ============================================================================
+
+function StepNarrator({
+  currentStep,
+  stepIndex,
+  totalSteps,
+  currentAct,
+  onNext,
+  onPrev,
+  onPlay,
+  onPause,
+  isPlaying,
+  playSpeed,
+  onSetSpeed,
+  onGoToAct,
+}) {
+  const phase = currentStep ? currentStep.phase : 'boot';
+  const phaseInfo = PHASE_COLORS[phase] || PHASE_COLORS.boot;
+  const narration = currentStep ? currentStep.narration : '';
+  const stepLabel = currentStep ? currentStep.label : '';
+
+  // Compute act-local step index
+  const actMeta = ACT_METADATA[currentAct];
+
+  // Speed presets in ms
+  const speedPresets = [
+    { label: '0.5x', value: 4000 },
+    { label: '1x',   value: 2000 },
+    { label: '2x',   value: 1000 },
+  ];
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 0,
+      background: '#11111b',
+      borderRadius: 12,
+      overflow: 'hidden',
+      fontFamily: FONT.sans,
+    }}>
+      {/* Act Tabs */}
+      <div style={{
+        display: 'flex',
+        gap: 0,
+        borderBottom: '1px solid #2a2a3c',
+      }}>
+        {[1, 2, 3, 4].map(act => {
+          const meta = ACT_METADATA[act];
+          const isActive = currentAct === act;
+          return (
+            <button
+              key={act}
+              onClick={() => onGoToAct(act)}
+              style={{
+                flex: 1,
+                padding: '10px 8px',
+                border: 'none',
+                borderBottom: isActive ? '2px solid #fbbf24' : '2px solid transparent',
+                background: isActive ? 'rgba(251,191,36,0.08)' : 'transparent',
+                color: isActive ? '#fbbf24' : '#6b7280',
+                fontSize: 12,
+                fontWeight: isActive ? 700 : 500,
+                cursor: 'pointer',
+                fontFamily: FONT.sans,
+                transition: 'all 0.2s ease',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+              title={meta ? meta.title : ''}
+            >
+              Act {act}{meta ? ': ' + meta.subtitle : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Step Header: Phase badge + step counter */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '10px 16px',
+        gap: 12,
+      }}>
+        {/* Phase badge */}
+        <span style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          padding: '3px 10px',
+          borderRadius: 999,
+          background: phaseInfo.bg,
+          color: phaseInfo.text,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          border: `1px solid ${phaseInfo.text}33`,
+          whiteSpace: 'nowrap',
+        }}>
+          {phaseInfo.label}
+        </span>
+
+        {/* Step label */}
+        <span style={{
+          color: '#e2e8f0',
+          fontSize: 13,
+          fontWeight: 600,
+          flex: 1,
+          textAlign: 'center',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {stepLabel}
+        </span>
+
+        {/* Step counter */}
+        <span style={{
+          color: '#6b7280',
+          fontSize: 12,
+          fontFamily: FONT.mono,
+          whiteSpace: 'nowrap',
+        }}>
+          Step {stepIndex + 1} of {totalSteps}
+        </span>
+      </div>
+
+      {/* Narration text */}
+      <div style={{
+        padding: '4px 20px 16px 20px',
+        minHeight: 80,
+      }}>
+        <p style={{
+          color: '#e2e8f0',
+          fontSize: 16,
+          lineHeight: 1.65,
+          margin: 0,
+          fontWeight: 400,
+        }}>
+          {highlightNarration(narration)}
+        </p>
+      </div>
+
+      {/* Controls bar */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '10px 16px',
+        borderTop: '1px solid #2a2a3c',
+        gap: 8,
+        flexWrap: 'wrap',
+      }}>
+        {/* Nav buttons */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <NavButton onClick={onPrev} disabled={stepIndex <= 0} title="Previous step (←)">
+            ◀ Back
+          </NavButton>
+          <NavButton onClick={onNext} disabled={stepIndex >= totalSteps - 1} title="Next step (→)">
+            Next ▶
+          </NavButton>
+          <NavButton
+            onClick={isPlaying ? onPause : onPlay}
+            highlight={isPlaying}
+            title={isPlaying ? 'Pause (P)' : 'Play (P)'}
+          >
+            {isPlaying ? '⏸ Pause' : '▶▶ Play'}
+          </NavButton>
+        </div>
+
+        {/* Speed control */}
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ color: '#6b7280', fontSize: 11, marginRight: 4 }}>Speed:</span>
+          {speedPresets.map(sp => (
+            <button
+              key={sp.label}
+              onClick={() => onSetSpeed(sp.value)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 6,
+                border: playSpeed === sp.value
+                  ? '1px solid #fbbf24'
+                  : '1px solid #2a2a3c',
+                background: playSpeed === sp.value
+                  ? 'rgba(251,191,36,0.12)'
+                  : 'transparent',
+                color: playSpeed === sp.value ? '#fbbf24' : '#6b7280',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontFamily: FONT.mono,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {sp.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Narrator sub-components ---
+
+function NavButton({ children, onClick, disabled, highlight, title }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        padding: '6px 14px',
+        borderRadius: 8,
+        border: highlight
+          ? '1px solid #fbbf24'
+          : '1px solid #2a2a3c',
+        background: highlight
+          ? 'rgba(251,191,36,0.15)'
+          : disabled
+            ? 'transparent'
+            : 'rgba(255,255,255,0.03)',
+        color: highlight
+          ? '#fbbf24'
+          : disabled
+            ? '#3a3a4c'
+            : '#e2e8f0',
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        fontFamily: FONT.sans,
+        minWidth: 44,
+        minHeight: 40,
+        transition: 'all 0.15s ease',
+        opacity: disabled ? 0.4 : 1,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * Highlight key phrases in narration text.
+ * Wraps text in single quotes and UPPERCASE phrases in styled spans.
+ */
+function highlightNarration(text) {
+  if (!text) return null;
+
+  // Split on quoted segments and specific emphasis words
+  const parts = [];
+  let remaining = text;
+  // Match: 'quoted text', ALLCAPS words (3+ chars), bold markers **text**
+  const pattern = /('([^']+)'|(?<!\w)(HOST|NOT|ALWAYS|SECOND|ANOTHER|TWO|THREE|SAME|DIFFERENT|NO|NEVER|NEW|ALL|WHO|WHAT)(?!\w)|\*\*([^*]+)\*\*)/g;
+  let match;
+  let lastIndex = 0;
+
+  while ((match = pattern.exec(remaining)) !== null) {
+    // Text before the match
+    if (match.index > lastIndex) {
+      parts.push(remaining.slice(lastIndex, match.index));
+    }
+
+    if (match[2]) {
+      // Quoted text → monospace amber
+      parts.push(
+        <span key={match.index} style={{
+          color: '#fbbf24',
+          fontFamily: FONT.mono,
+          fontSize: '0.92em',
+          background: 'rgba(251,191,36,0.08)',
+          padding: '1px 4px',
+          borderRadius: 3,
+        }}>
+          {match[2]}
+        </span>
+      );
+    } else if (match[3]) {
+      // UPPERCASE emphasis → bold amber
+      parts.push(
+        <span key={match.index} style={{
+          color: '#fbbf24',
+          fontWeight: 700,
+        }}>
+          {match[3]}
+        </span>
+      );
+    } else if (match[4]) {
+      // **bold** text
+      parts.push(
+        <strong key={match.index} style={{ color: '#fbbf24' }}>
+          {match[4]}
+        </strong>
+      );
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < remaining.length) {
+    parts.push(remaining.slice(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
+
+// ============================================================================
+// 3. ActTransition
+// ============================================================================
+
+function ActTransition({ act, onDismiss }) {
+  const [visible, setVisible] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const timerRef = useRef(null);
+
+  const meta = ACT_METADATA[act];
+
+  useEffect(() => {
+    // Fade in
+    const fadeInTimer = setTimeout(() => setVisible(true), 30);
+
+    // Auto-dismiss after 3 seconds
+    timerRef.current = setTimeout(() => {
+      handleDismiss();
+    }, 3000);
+
+    return () => {
+      clearTimeout(fadeInTimer);
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [act]);
+
+  const handleDismiss = () => {
+    setExiting(true);
+    setTimeout(() => {
+      if (onDismiss) onDismiss();
+    }, 300);
+  };
+
+  const handleClick = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    handleDismiss();
+  };
+
+  if (!meta) return null;
+
+  // Act-specific accent colors
+  const actColors = {
+    1: { accent: '#f59e0b', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.2)' },
+    2: { accent: '#a855f7', bg: 'rgba(168,85,247,0.08)', border: 'rgba(168,85,247,0.2)' },
+    3: { accent: '#10b981', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.2)' },
+    4: { accent: '#3b82f6', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.2)' },
+  };
+  const colors = actColors[act] || actColors[1];
+
+  return (
+    <div
+      onClick={handleClick}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'rgba(0,0,0,0.7)',
+        backdropFilter: 'blur(8px)',
+        zIndex: 9999,
+        opacity: visible && !exiting ? 1 : 0,
+        transition: 'opacity 0.3s ease',
+        cursor: 'pointer',
+        fontFamily: FONT.sans,
+      }}
+    >
+      <div style={{
+        maxWidth: 520,
+        width: '90%',
+        background: '#1a1a2e',
+        border: `1px solid ${colors.border}`,
+        borderRadius: 16,
+        padding: '36px 40px',
+        textAlign: 'center',
+        transform: visible && !exiting ? 'scale(1) translateY(0)' : 'scale(0.95) translateY(8px)',
+        transition: 'transform 0.3s ease',
+      }}>
+        {/* Act number */}
+        <div style={{
+          fontSize: 13,
+          fontWeight: 700,
+          color: colors.accent,
+          textTransform: 'uppercase',
+          letterSpacing: '0.12em',
+          marginBottom: 6,
+        }}>
+          Act {meta.number}
+        </div>
+
+        {/* Title */}
+        <h2 style={{
+          fontSize: 28,
+          fontWeight: 700,
+          color: '#f1f5f9',
+          margin: '0 0 4px 0',
+          lineHeight: 1.2,
+        }}>
+          {meta.title}
+        </h2>
+
+        {/* Subtitle */}
+        <div style={{
+          fontSize: 15,
+          color: '#94a3b8',
+          marginBottom: 20,
+          fontStyle: 'italic',
+        }}>
+          {meta.subtitle}
+        </div>
+
+        {/* Description */}
+        <p style={{
+          fontSize: 15,
+          color: '#cbd5e1',
+          lineHeight: 1.6,
+          margin: '0 0 20px 0',
+        }}>
+          {meta.description}
+        </p>
+
+        {/* Watch for */}
+        <div style={{
+          background: colors.bg,
+          border: `1px solid ${colors.border}`,
+          borderRadius: 10,
+          padding: '12px 16px',
+          textAlign: 'left',
+        }}>
+          <div style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color: colors.accent,
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            marginBottom: 4,
+          }}>
+            What to watch for
+          </div>
+          <p style={{
+            fontSize: 14,
+            color: '#e2e8f0',
+            lineHeight: 1.5,
+            margin: 0,
+          }}>
+            {meta.watchFor}
+          </p>
+        </div>
+
+        {/* Skip hint */}
+        <div style={{
+          marginTop: 20,
+          fontSize: 12,
+          color: '#4b5563',
+        }}>
+          Click anywhere or wait to continue
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ============================================================================
+// SECTION 9: APPLICATION SHELL (Context, Layout, Keyboard, Landing)
+// ============================================================================
+
+// ============================================================================
+// APPLICATION CONTEXT
+// ============================================================================
+
+const SimulationContext = createContext(null);
+
+function useSimulationContext() {
+  return useContext(SimulationContext);
+}
+
+// ============================================================================
+// LANDING SCREEN
+// ============================================================================
+
+function LandingScreen({ onStart, onSkipToAct }) {
+  return (
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: '#0f0f1a',
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    }}>
+      {/* Background dots */}
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', opacity: 0.04 }}>
+        <svg width="100%" height="100%">
+          {Array.from({ length: 40 }, (_, i) =>
+            Array.from({ length: 25 }, (_, j) => (
+              <circle key={`${i}-${j}`} cx={i * 48 + 24} cy={j * 48 + 24} r="1.5" fill="#fff" />
+            ))
+          )}
+        </svg>
+      </div>
+
+      <div style={{
+        maxWidth: 580,
+        width: '90%',
+        textAlign: 'center',
+        position: 'relative',
+        animation: 'fadeIn 0.6s ease-out',
+      }}>
+        {/* Ambient glow */}
+        <div style={{
+          position: 'absolute',
+          width: 400,
+          height: 400,
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(245,158,11,0.12) 0%, transparent 70%)',
+          top: -120,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          pointerEvents: 'none',
+        }} />
+
+        {/* Logo */}
+        <div style={{
+          width: 72,
+          height: 72,
+          borderRadius: 18,
+          background: 'rgba(245,158,11,0.08)',
+          border: '1px solid rgba(245,158,11,0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          margin: '0 auto 28px',
+        }}>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="1.5">
+            <path d="M12 2L2 7l10 5 10-5-10-5z" />
+            <path d="M2 17l10 5 10-5" />
+            <path d="M2 12l10 5 10-5" />
+          </svg>
+        </div>
+
+        {/* Title */}
+        <h1 style={{
+          fontSize: 44,
+          fontWeight: 800,
+          color: '#f1f5f9',
+          margin: '0 0 8px',
+          letterSpacing: '-0.03em',
+          lineHeight: 1.1,
+        }}>
+          MCP Glass Box Demo
+        </h1>
+
+        {/* Subtitle */}
+        <p style={{
+          fontSize: 18,
+          color: '#94a3b8',
+          margin: '0 0 16px',
+          fontStyle: 'italic',
+        }}>
+          An interactive simulation of the Model Context Protocol
+        </p>
+
+        {/* Description */}
+        <p style={{
+          fontSize: 15,
+          color: '#64748b',
+          lineHeight: 1.65,
+          margin: '0 auto 40px',
+          maxWidth: 480,
+        }}>
+          Watch every layer of MCP come alive — from boot sequence to tool execution.
+          See JSON-RPC messages flow between components, API calls being constructed,
+          and tool results injected back into conversations.
+        </p>
+
+        {/* Start button */}
+        <button
+          onClick={() => onStart()}
+          style={{
+            padding: '16px 56px',
+            borderRadius: 14,
+            border: '1px solid rgba(245,158,11,0.4)',
+            background: 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(245,158,11,0.08))',
+            color: '#fbbf24',
+            fontSize: 20,
+            fontWeight: 700,
+            cursor: 'pointer',
+            transition: 'all 0.25s ease',
+            boxShadow: '0 0 40px rgba(245,158,11,0.12)',
+            fontFamily: 'inherit',
+            letterSpacing: '0.02em',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'linear-gradient(135deg, rgba(245,158,11,0.3), rgba(245,158,11,0.15))';
+            e.currentTarget.style.boxShadow = '0 0 60px rgba(245,158,11,0.2)';
+            e.currentTarget.style.transform = 'translateY(-1px)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'linear-gradient(135deg, rgba(245,158,11,0.2), rgba(245,158,11,0.08))';
+            e.currentTarget.style.boxShadow = '0 0 40px rgba(245,158,11,0.12)';
+            e.currentTarget.style.transform = 'translateY(0)';
+          }}
+        >
+          Start Demo
+        </button>
+
+        {/* Skip to Act links */}
+        <div style={{
+          marginTop: 28,
+          display: 'flex',
+          gap: 12,
+          justifyContent: 'center',
+          flexWrap: 'wrap',
+        }}>
+          <span style={{ color: '#4b5563', fontSize: 13, alignSelf: 'center' }}>Skip to:</span>
+          {[
+            { act: 1, label: 'Boot Sequence' },
+            { act: 2, label: 'Simple Question' },
+            { act: 3, label: 'Tool Call' },
+            { act: 4, label: 'Chained Calls' },
+          ].map(item => (
+            <button
+              key={item.act}
+              onClick={() => onSkipToAct(item.act)}
+              style={{
+                padding: '5px 14px',
+                borderRadius: 8,
+                border: '1px solid #2a2a3c',
+                background: 'transparent',
+                color: '#6b7280',
+                fontSize: 13,
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                fontFamily: 'inherit',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = '#e2e8f0';
+                e.currentTarget.style.borderColor = '#4a4a5c';
+                e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = '#6b7280';
+                e.currentTarget.style.borderColor = '#2a2a3c';
+                e.currentTarget.style.background = 'transparent';
+              }}
+            >
+              Act {item.act}: {item.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Keyboard hint */}
+        <p style={{
+          marginTop: 32,
+          fontSize: 12,
+          color: '#374151',
+        }}>
+          Keyboard: Arrow keys to navigate, 1-4 for acts, P to play/pause, Esc to reset
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// HEADER BAR
+// ============================================================================
+
+function HeaderBar({ currentAct, onGoToAct, currentStepIndex, totalSteps }) {
+  const progressPct = totalSteps > 0 ? ((currentStepIndex + 1) / totalSteps) * 100 : 0;
+
+  return (
+    <div style={{ flexShrink: 0 }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '6px 16px',
+        background: '#11111b',
+        borderBottom: '1px solid #2a2a3c',
+      }}>
+        {/* Title */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5z" />
+            <path d="M2 17l10 5 10-5" />
+            <path d="M2 12l10 5 10-5" />
+          </svg>
+          <span style={{ color: '#f1f5f9', fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>
+            MCP Glass Box Demo
+          </span>
+        </div>
+
+        {/* Act buttons + step counter */}
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          {[1, 2, 3, 4].map(act => (
+            <button
+              key={act}
+              onClick={() => onGoToAct(act)}
+              style={{
+                padding: '4px 14px',
+                borderRadius: 6,
+                border: currentAct === act ? '1px solid #fbbf24' : '1px solid transparent',
+                background: currentAct === act ? 'rgba(251,191,36,0.12)' : 'transparent',
+                color: currentAct === act ? '#fbbf24' : '#6b7280',
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                transition: 'all 0.15s',
+              }}
+            >
+              {act}
+            </button>
+          ))}
+          <span style={{
+            color: '#4b5563',
+            fontSize: 11,
+            marginLeft: 8,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+          }}>
+            {currentStepIndex + 1}/{totalSteps}
+          </span>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ height: 2, background: '#1a1a2e' }}>
+        <div style={{
+          height: '100%',
+          width: progressPct + '%',
+          background: 'linear-gradient(90deg, #f59e0b, #fbbf24)',
+          transition: 'width 0.3s ease',
+        }} />
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// MAIN APP COMPONENT
+// ============================================================================
+
+function App() {
+  const [started, setStarted] = useState(false);
+  const [showActTransition, setShowActTransition] = useState(null);
+  const [configExpanded, setConfigExpanded] = useState(false);
+  const [selectedLogEntry, setSelectedLogEntry] = useState(null);
+  const [isWide, setIsWide] = useState(
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+  );
+  const prevActRef = useRef(null);
+
+  const sim = useSimulation();
+
+  // Responsive resize handler
+  useEffect(() => {
+    const handler = () => setIsWide(window.innerWidth >= 1024);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+
+  // Detect act changes for transition overlays
+  useEffect(() => {
+    if (started && prevActRef.current !== null && prevActRef.current !== sim.currentAct) {
+      setShowActTransition(sim.currentAct);
+    }
+    prevActRef.current = sim.currentAct;
+  }, [sim.currentAct, started]);
+
+  // Reset selected log entry on step change
+  useEffect(() => {
+    setSelectedLogEntry(null);
+  }, [sim.currentStepIndex]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    if (!started) return;
+    const handler = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      switch (e.key) {
+        case 'ArrowRight':
+        case ' ':
+          e.preventDefault();
+          sim.next();
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          sim.prev();
+          break;
+        case '1': case '2': case '3': case '4':
+          e.preventDefault();
+          sim.goToAct(parseInt(e.key));
+          break;
+        case 'p': case 'P':
+          e.preventDefault();
+          sim.togglePlay();
+          break;
+        case 'Escape':
+          e.preventDefault();
+          sim.reset();
+          break;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [started, sim.next, sim.prev, sim.goToAct, sim.togglePlay, sim.reset]);
+
+  // Compute inspector payload
+  const inspectorPayload = useMemo(() => {
+    if (selectedLogEntry) return selectedLogEntry.payload;
+    return sim.currentStep.message || null;
+  }, [selectedLogEntry, sim.currentStep]);
+
+  // Compute previous API request for diff view
+  const previousApiRequest = useMemo(() => {
+    if (!inspectorPayload || !inspectorPayload.messages) return null;
+    const targetStepId = selectedLogEntry ? selectedLogEntry.stepId : sim.currentStep.id;
+    const idx = sim.messageLog.findIndex(m => m.stepId === targetStepId);
+    for (let i = (idx >= 0 ? idx : sim.messageLog.length) - 1; i >= 0; i--) {
+      const entry = sim.messageLog[i];
+      if (entry.payload && entry.payload.messages && entry.stepId !== targetStepId) {
+        return entry.payload;
+      }
+    }
+    return null;
+  }, [inspectorPayload, sim.messageLog, selectedLogEntry, sim.currentStep]);
+
+  const isWaitingForApi = sim.state.hostState === 'waiting_for_api';
+
+  // Start handlers
+  const handleStart = useCallback(() => {
+    setStarted(true);
+    sim.goToStep(0);
+    setShowActTransition(1);
+    prevActRef.current = 1;
+  }, [sim]);
+
+  const handleSkipToAct = useCallback((act) => {
+    setStarted(true);
+    sim.goToAct(act);
+    prevActRef.current = act;
+  }, [sim]);
+
+  // Landing screen
+  if (!started) {
+    return <LandingScreen onStart={handleStart} onSkipToAct={handleSkipToAct} />;
+  }
+
+  // Main demo layout
+  return (
+    <SimulationContext.Provider value={sim}>
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        background: '#0f0f1a',
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+      }}>
+        {/* Header */}
+        <HeaderBar
+          currentAct={sim.currentAct}
+          onGoToAct={sim.goToAct}
+          currentStepIndex={sim.currentStepIndex}
+          totalSteps={sim.totalSteps}
+        />
+
+        {/* Main content area */}
+        {isWide ? (
+          /* === WIDE LAYOUT (>= 1024px) === */
+          <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            {/* Left: Chat Panel */}
+            <div style={{
+              width: '38%',
+              padding: '8px 4px 8px 8px',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+            }}>
+              <ChatPanel
+                conversationHistory={sim.conversationHistory}
+                currentStep={sim.currentStep}
+                isWaitingForApi={isWaitingForApi}
+              />
+            </div>
+
+            {/* Right: Internals */}
+            <div style={{
+              width: '62%',
+              display: 'flex',
+              flexDirection: 'column',
+              padding: '8px 8px 8px 4px',
+              gap: 6,
+              minHeight: 0,
+            }}>
+              {/* Architecture Diagram ~45% */}
+              <div style={{
+                flex: '4.5 1 0%',
+                minHeight: 0,
+                overflow: 'hidden',
+                borderRadius: 12,
+              }}>
+                <ArchitectureDiagram
+                  activeComponents={sim.activeComponents}
+                  messageFlow={sim.messageFlow}
+                  componentStates={sim.componentStates}
+                  phase={sim.currentStep.phase}
+                />
+              </div>
+
+              {/* Message Log + Inspector ~30% */}
+              <div style={{
+                flex: '3 1 0%',
+                display: 'flex',
+                gap: 6,
+                minHeight: 0,
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  width: '40%',
+                  minHeight: 0,
+                  overflow: 'auto',
+                  borderRadius: 6,
+                }}>
+                  <MessageLog
+                    messageLog={sim.messageLog}
+                    currentStepIndex={sim.currentStepIndex}
+                    onSelectMessage={(entry) => setSelectedLogEntry(entry)}
+                  />
+                </div>
+                <div style={{
+                  width: '60%',
+                  minHeight: 0,
+                  overflow: 'auto',
+                  borderRadius: 6,
+                }}>
+                  <PayloadInspector
+                    message={inspectorPayload}
+                    previousApiRequest={previousApiRequest}
+                  />
+                </div>
+              </div>
+
+              {/* Step Narrator ~25% */}
+              <div style={{
+                flex: '2.5 1 0%',
+                minHeight: 0,
+                overflow: 'auto',
+                borderRadius: 12,
+              }}>
+                <StepNarrator
+                  currentStep={sim.currentStep}
+                  stepIndex={sim.currentStepIndex}
+                  totalSteps={sim.totalSteps}
+                  currentAct={sim.currentAct}
+                  onNext={sim.next}
+                  onPrev={sim.prev}
+                  onPlay={sim.play}
+                  onPause={sim.pause}
+                  isPlaying={sim.isPlaying}
+                  playSpeed={sim.playSpeed}
+                  onSetSpeed={sim.setPlaySpeed}
+                  onGoToAct={sim.goToAct}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* === NARROW LAYOUT (< 1024px) === */
+          <div style={{
+            flex: 1,
+            overflow: 'auto',
+            padding: 8,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+          }}>
+            <div style={{ minHeight: 280 }}>
+              <ChatPanel
+                conversationHistory={sim.conversationHistory}
+                currentStep={sim.currentStep}
+                isWaitingForApi={isWaitingForApi}
+              />
+            </div>
+            <ArchitectureDiagram
+              activeComponents={sim.activeComponents}
+              messageFlow={sim.messageFlow}
+              componentStates={sim.componentStates}
+              phase={sim.currentStep.phase}
+            />
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+                <MessageLog
+                  messageLog={sim.messageLog}
+                  currentStepIndex={sim.currentStepIndex}
+                  onSelectMessage={(entry) => setSelectedLogEntry(entry)}
+                />
+              </div>
+              <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+                <PayloadInspector
+                  message={inspectorPayload}
+                  previousApiRequest={previousApiRequest}
+                />
+              </div>
+            </div>
+            <StepNarrator
+              currentStep={sim.currentStep}
+              stepIndex={sim.currentStepIndex}
+              totalSteps={sim.totalSteps}
+              currentAct={sim.currentAct}
+              onNext={sim.next}
+              onPrev={sim.prev}
+              onPlay={sim.play}
+              onPause={sim.pause}
+              isPlaying={sim.isPlaying}
+              playSpeed={sim.playSpeed}
+              onSetSpeed={sim.setPlaySpeed}
+              onGoToAct={sim.goToAct}
+            />
+          </div>
+        )}
+
+        {/* Config Viewer (collapsible bottom drawer) */}
+        <div style={{ flexShrink: 0, padding: '0 8px 8px' }}>
+          <ConfigViewer
+            config={sim.config}
+            isExpanded={configExpanded}
+            onToggle={() => setConfigExpanded(prev => !prev)}
+          />
+        </div>
+
+        {/* Act Transition Overlay */}
+        {showActTransition && (
+          <ActTransition
+            act={showActTransition}
+            onDismiss={() => setShowActTransition(null)}
+          />
+        )}
+      </div>
+    </SimulationContext.Provider>
+  );
+}
+
+// ============================================================================
+// RENDER
+// ============================================================================
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+  </script>
+</body>
+</html>
